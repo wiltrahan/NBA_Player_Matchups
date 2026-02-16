@@ -1,0 +1,7 @@
+fastapi==0.115.8
+uvicorn[standard]==0.34.0
+nba_api==1.8.0
+pandas==2.2.3
+httpx==0.28.1
+python-dateutil==2.9.0.post0
+psycopg[binary]==3.2.9
