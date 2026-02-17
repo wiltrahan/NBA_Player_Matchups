@@ -19,7 +19,7 @@ from nba_api.stats.static import teams as nba_teams
 
 from app.models import Game, PlayerCardResponse, PositionGroup
 from app.services.scoring import build_environment_scores, build_rank_tables
-from app.utils import SUPPORTED_STATS, map_position_groups, parse_matchup_opponent
+from app.utils import SUPPORTED_STATS, map_position_groups, parse_matchup_opponent, season_label_for_date
 
 
 class NBADataService:
@@ -31,24 +31,56 @@ class NBADataService:
         self.abbr_to_id = {str(team["abbreviation"]).upper(): int(team["id"]) for team in self._teams}
         self.team_abbrs = sorted(self.id_to_abbr.values())
         self._roster_position_cache: dict[tuple[str, int], dict[int, list[PositionGroup]]] = {}
+        self._roster_player_ids_cache: dict[tuple[str, int], set[int] | None] = {}
         self._season_player_logs_cache: dict[str, pd.DataFrame] = {}
         self._season_team_logs_cache: dict[str, pd.DataFrame] = {}
         self._raw_data_dir = Path(__file__).resolve().parents[2] / ".data" / "raw"
 
     def fetch_slate_games(self, slate_date: date) -> List[Game]:
-        try:
-            board = scoreboardv2.ScoreboardV2(
-                game_date=slate_date.strftime("%m/%d/%Y"),
-                day_offset=0,
-                league_id="00",
-            )
-            frames = board.get_data_frames()
-            if not frames:
-                return []
-        except Exception as exc:
-            self._logger.warning("Scoreboard fetch failed for %s: %s", slate_date.isoformat(), exc)
-            return []
+        scoreboard_games = self._fetch_slate_games_from_scoreboard(slate_date)
+        if scoreboard_games:
+            return self._dedupe_games_by_matchup(scoreboard_games)
 
+        fallback_games = self._fetch_slate_games_from_fallback(slate_date)
+        if fallback_games:
+            self._logger.info(
+                "Using fallback slate games for %s (%d games).",
+                slate_date.isoformat(),
+                len(fallback_games),
+            )
+        return self._dedupe_games_by_matchup(fallback_games)
+
+    def _fetch_slate_games_from_scoreboard(self, slate_date: date) -> list[Game]:
+        last_error: Exception | None = None
+        for attempt in range(1, 3):
+            try:
+                board = scoreboardv2.ScoreboardV2(
+                    game_date=slate_date.strftime("%m/%d/%Y"),
+                    day_offset=0,
+                    league_id="00",
+                    timeout=8,
+                )
+                frames = board.get_data_frames()
+                if not frames:
+                    return []
+                return self._games_from_scoreboard_frames(frames)
+            except Exception as exc:
+                last_error = exc
+                self._logger.warning(
+                    "Scoreboard fetch failed for %s (attempt %d/2): %s",
+                    slate_date.isoformat(),
+                    attempt,
+                    exc,
+                )
+        if last_error is not None:
+            self._logger.warning(
+                "Scoreboard fetch exhausted retries for %s: %s",
+                slate_date.isoformat(),
+                last_error,
+            )
+        return []
+
+    def _games_from_scoreboard_frames(self, frames: list[pd.DataFrame]) -> list[Game]:
         headers = frames[0]
         line_scores = frames[1] if len(frames) > 1 else pd.DataFrame()
 
@@ -61,7 +93,7 @@ class NBADataService:
                 if game_id and team_id and abbr:
                     team_lookup[(game_id, team_id)] = abbr
 
-        games: List[Game] = []
+        games: list[Game] = []
         for row in headers.to_dict("records"):
             game_id = str(row.get("GAME_ID", "")).strip()
             home_id = int(row.get("HOME_TEAM_ID", 0) or 0)
@@ -89,8 +121,124 @@ class NBADataService:
                     start_time_utc=(str(row.get("GAME_DATE_EST") or "") or None),
                 )
             )
+        return games
+
+    def _fetch_slate_games_from_fallback(self, slate_date: date) -> list[Game]:
+        season = season_label_for_date(slate_date)
+        cached_team_logs = self._get_cached_team_logs_for_season(season)
+        if not cached_team_logs.empty:
+            games = self._build_games_from_team_logs(cached_team_logs, slate_date)
+            if games:
+                return games
+
+        try:
+            endpoint = leaguegamefinder.LeagueGameFinder(
+                player_or_team_abbreviation="T",
+                season_nullable=season,
+                season_type_nullable="Regular Season",
+                date_from_nullable=slate_date.strftime("%m/%d/%Y"),
+                date_to_nullable=slate_date.strftime("%m/%d/%Y"),
+                timeout=8,
+            )
+            frames = endpoint.get_data_frames()
+            if not frames:
+                return []
+            team_logs = frames[0]
+            return self._build_games_from_team_logs(team_logs, slate_date)
+        except Exception as exc:
+            self._logger.warning(
+                "Fallback slate fetch failed for %s: %s",
+                slate_date.isoformat(),
+                exc,
+            )
+            return []
+
+    def _get_cached_team_logs_for_season(self, season: str) -> pd.DataFrame:
+        cached = self._season_team_logs_cache.get(season)
+        if cached is not None:
+            return cached
+        loaded = self._read_cached_frame(self._raw_cache_path("team_logs", season))
+        if loaded is not None:
+            self._season_team_logs_cache[season] = loaded
+            return loaded
+        return pd.DataFrame()
+
+    def _build_games_from_team_logs(self, team_logs_df: pd.DataFrame, slate_date: date) -> list[Game]:
+        if team_logs_df.empty:
+            return []
+
+        game_col = self._pick_column(team_logs_df, ["GAME_ID"])
+        team_col = self._pick_column(team_logs_df, ["TEAM_ABBREVIATION"])
+        matchup_col = self._pick_column(team_logs_df, ["MATCHUP"])
+        date_col = self._pick_column(team_logs_df, ["GAME_DATE", "GAME_DATE_EST"])
+        if not all([game_col, team_col, matchup_col, date_col]):
+            return []
+
+        frame = team_logs_df[[game_col, team_col, matchup_col, date_col]].copy()
+        frame["_parsed_date"] = pd.to_datetime(frame[date_col], errors="coerce").dt.date
+        frame = frame[frame["_parsed_date"] == slate_date]
+        if frame.empty:
+            return []
+
+        grouped: dict[str, dict[str, str]] = defaultdict(dict)
+        for row in frame.to_dict("records"):
+            game_id = str(row.get(game_col, "")).strip()
+            team = str(row.get(team_col, "")).strip().upper()
+            matchup = str(row.get(matchup_col, "")).upper()
+            if not game_id or not team:
+                continue
+            grouped[game_id][team] = matchup
+
+        games: list[Game] = []
+        for game_id, team_matchups in sorted(grouped.items()):
+            home_team: str | None = None
+            away_team: str | None = None
+            teams = list(team_matchups.keys())
+            for team, matchup in team_matchups.items():
+                if " VS." in matchup or " VS " in matchup:
+                    home_team = team
+                elif "@" in matchup:
+                    away_team = team
+
+            if not home_team and len(teams) == 2 and away_team in teams:
+                home_team = teams[0] if teams[1] == away_team else teams[1]
+            if not away_team and len(teams) == 2 and home_team in teams:
+                away_team = teams[0] if teams[1] == home_team else teams[1]
+
+            if not home_team or not away_team:
+                continue
+
+            games.append(
+                Game(
+                    game_id=game_id,
+                    away_team=away_team,
+                    home_team=home_team,
+                    start_time_utc=None,
+                )
+            )
 
         return games
+
+    @staticmethod
+    def _dedupe_games_by_matchup(games: list[Game]) -> list[Game]:
+        if not games:
+            return []
+
+        deduped: dict[tuple[str, str], Game] = {}
+        for game in games:
+            key = (game.away_team, game.home_team)
+            existing = deduped.get(key)
+            if existing is None:
+                deduped[key] = game
+                continue
+            # Prefer rows with known start time, then lowest game id for deterministic output.
+            if (not existing.start_time_utc and game.start_time_utc) or game.game_id < existing.game_id:
+                deduped[key] = game
+
+        return sorted(
+            deduped.values(),
+            key=lambda game: (game.start_time_utc or "", game.away_team, game.home_team, game.game_id),
+        )
 
     def fetch_player_baselines(self, as_of_date: date, season: str) -> pd.DataFrame:
         player_logs = self.fetch_player_logs(as_of_date=as_of_date, season=season)
@@ -352,17 +500,20 @@ class NBADataService:
         team_logs_elapsed = perf_counter() - started
         player_minutes = self._build_player_minutes_map(player_logs)
         roster_positions = self._build_roster_position_map(season=season, team_abbr_filter=slate_teams)
+        team_roster_player_ids = self._build_team_roster_player_id_map(season=season, team_abbr_filter=slate_teams)
         roster_elapsed = perf_counter() - started
 
         rotation_pool, position_map = self._build_rotation_pool(
             baselines_df=player_baselines,
             player_minutes=player_minutes,
             roster_positions=roster_positions,
+            team_roster_player_ids=team_roster_player_ids,
             team_filter=slate_teams,
         )
         player_cards = self._build_player_cards(
             baselines_df=player_baselines,
             player_positions=position_map,
+            team_roster_player_ids=team_roster_player_ids,
             as_of_date=as_of_date,
             season=season,
             team_filter=slate_teams,
@@ -421,6 +572,7 @@ class NBADataService:
         self,
         baselines_df: pd.DataFrame,
         player_positions: dict[int, list[PositionGroup]],
+        team_roster_player_ids: dict[str, set[int]] | None,
         as_of_date: date,
         season: str,
         team_filter: set[str] | None = None,
@@ -460,6 +612,9 @@ class NBADataService:
             player_name = str(row.get(name_col, "")).strip()
             team = str(row.get(team_col, "")).strip().upper()
             if team_filter and team not in team_filter:
+                continue
+            roster_ids = (team_roster_player_ids or {}).get(team)
+            if roster_ids is not None and player_id not in roster_ids:
                 continue
             if not player_name or not team:
                 continue
@@ -503,6 +658,7 @@ class NBADataService:
         baselines_df: pd.DataFrame,
         player_minutes: dict[int, float],
         roster_positions: dict[int, list[PositionGroup]],
+        team_roster_player_ids: dict[str, set[int]] | None,
         team_filter: set[str] | None = None,
     ) -> tuple[list[dict], dict[int, list[PositionGroup]]]:
         if baselines_df.empty:
@@ -543,6 +699,9 @@ class NBADataService:
             player_name = str(row.get(player_name_col, "")).strip()
             team = str(row.get(team_col, "")).strip().upper()
             if team_filter and team not in team_filter:
+                continue
+            roster_ids = (team_roster_player_ids or {}).get(team)
+            if roster_ids is not None and player_id not in roster_ids:
                 continue
             baseline_minutes = float(row.get(min_col, 0.0) or 0.0) if min_col else 0.0
             avg_minutes = float(player_minutes.get(player_id, baseline_minutes))
@@ -628,29 +787,62 @@ class NBADataService:
         if not self._enable_roster_fetch:
             return {}
 
-        result: dict[int, list[PositionGroup]] = {}
         team_ids: list[int]
         if team_abbr_filter:
             team_ids = [self.abbr_to_id[abbr] for abbr in sorted(team_abbr_filter) if abbr in self.abbr_to_id]
         else:
             team_ids = [int(team["id"]) for team in self._teams]
+        self._ensure_roster_cache(season=season, team_ids=team_ids)
+
+        result: dict[int, list[PositionGroup]] = {}
+        for team_id in team_ids:
+            positions = self._roster_position_cache.get((season, team_id), {})
+            result.update(positions)
+        return result
+
+    def _build_team_roster_player_id_map(
+        self,
+        season: str,
+        team_abbr_filter: set[str] | None = None,
+    ) -> dict[str, set[int]]:
+        if not self._enable_roster_fetch:
+            return {}
+
+        team_ids: list[int]
+        if team_abbr_filter:
+            team_ids = [self.abbr_to_id[abbr] for abbr in sorted(team_abbr_filter) if abbr in self.abbr_to_id]
+        else:
+            team_ids = [int(team["id"]) for team in self._teams]
+        self._ensure_roster_cache(season=season, team_ids=team_ids)
+
+        result: dict[str, set[int]] = {}
+        for team_id in team_ids:
+            player_ids = self._roster_player_ids_cache.get((season, team_id))
+            team_abbr = self.id_to_abbr.get(team_id)
+            if team_abbr and player_ids:
+                result[team_abbr] = set(player_ids)
+        return result
+
+    def _ensure_roster_cache(self, season: str, team_ids: list[int]) -> None:
+        if not team_ids:
+            return
 
         uncached_team_ids: list[int] = []
         for team_id in team_ids:
             cache_key = (season, team_id)
-            cached = self._roster_position_cache.get(cache_key)
-            if cached is not None:
-                result.update(cached)
+            positions_cached = cache_key in self._roster_position_cache
+            player_ids_cached = cache_key in self._roster_player_ids_cache
+            if positions_cached and player_ids_cached:
                 continue
             uncached_team_ids.append(team_id)
 
         if not uncached_team_ids:
-            return result
+            return
 
         max_workers = min(8, len(uncached_team_ids))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(self._fetch_team_roster_positions, team_id, season): team_id
+                executor.submit(self._fetch_team_roster_data, team_id, season): team_id
                 for team_id in uncached_team_ids
             }
 
@@ -658,7 +850,7 @@ class NBADataService:
                 team_id = futures[future]
                 cache_key = (season, team_id)
                 try:
-                    team_player_positions = future.result()
+                    team_player_positions, player_ids = future.result()
                 except Exception as exc:
                     self._logger.warning(
                         "Roster fetch failed for team_id=%s season=%s: %s",
@@ -666,38 +858,39 @@ class NBADataService:
                         season,
                         exc,
                     )
-                    team_player_positions = {}
+                    team_player_positions, player_ids = {}, None
 
                 self._roster_position_cache[cache_key] = team_player_positions
-                result.update(team_player_positions)
+                self._roster_player_ids_cache[cache_key] = player_ids
 
-        return result
-
-    def _fetch_team_roster_positions(self, team_id: int, season: str) -> dict[int, list[PositionGroup]]:
+    def _fetch_team_roster_data(self, team_id: int, season: str) -> tuple[dict[int, list[PositionGroup]], set[int]]:
         endpoint = commonteamroster.CommonTeamRoster(team_id=team_id, season=season, timeout=6)
         frames = endpoint.get_data_frames()
         if not frames:
-            return {}
+            return {}, set()
         roster_df = frames[0]
         if roster_df.empty:
-            return {}
+            return {}, set()
 
         player_id_col = self._pick_column(roster_df, ["PLAYER_ID"])
         position_col = self._pick_column(roster_df, ["POSITION", "POS"])
-        if not player_id_col or not position_col:
-            return {}
+        if not player_id_col:
+            return {}, set()
 
         team_player_positions: dict[int, list[PositionGroup]] = {}
+        team_player_ids: set[int] = set()
         for row in roster_df.to_dict("records"):
             player_id = int(row.get(player_id_col, 0) or 0)
             if not player_id:
                 continue
-            position_text = str(row.get(position_col, ""))
-            mapped = map_position_groups(position_text)
-            if mapped:
-                team_player_positions[player_id] = mapped
+            team_player_ids.add(player_id)
+            if position_col:
+                position_text = str(row.get(position_col, ""))
+                mapped = map_position_groups(position_text)
+                if mapped:
+                    team_player_positions[player_id] = mapped
 
-        return team_player_positions
+        return team_player_positions, team_player_ids
 
     @staticmethod
     def _infer_position_groups(
