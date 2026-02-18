@@ -4,6 +4,7 @@ import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import { fetchMatchups, fetchMeta, fetchPlayerCard, refreshSlate } from "@/lib/api";
 import type { MatchupResponse, MetaResponse, PlayerCardResponse, WindowType } from "@/lib/types";
 import { DensityToggle } from "./components/DensityToggle";
+import { MatchupGrid } from "./components/matchups/MatchupGrid";
 import { PageLayout } from "./components/PageLayout";
 import { RankLegend } from "./components/RankLegend";
 import { RankPill } from "./components/RankPill";
@@ -11,6 +12,7 @@ import { ThemeToggle } from "./components/ThemeToggle";
 import { Button } from "./components/controls/Button";
 import { Input } from "./components/controls/Input";
 import { Select } from "./components/controls/Select";
+import { buildMatchupPanels } from "@/lib/matchup_panels";
 
 const STATS = ["PTS", "REB", "AST", "3PM", "STL", "BLK"];
 const TEAM_ALIASES: Record<string, string[]> = {
@@ -80,6 +82,7 @@ const TEAM_COLORS: Record<string, string> = {
 };
 type SortDirection = "asc" | "desc";
 type Density = "comfortable" | "compact";
+type MatchupView = "grid" | "table";
 type SortKey =
   | "player_name"
   | "team"
@@ -163,6 +166,7 @@ export default function HomePage() {
   const [sortKey, setSortKey] = useState<SortKey>("PTS");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [density, setDensity] = useState<Density>("comfortable");
+  const [viewOverride, setViewOverride] = useState<MatchupView | null>(null);
   const [filtersExpanded, setFiltersExpanded] = useState(true);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -171,6 +175,7 @@ export default function HomePage() {
   const [cardError, setCardError] = useState<string | null>(null);
   const [selectedCard, setSelectedCard] = useState<PlayerCardResponse | null>(null);
   const [activePlayerRowId, setActivePlayerRowId] = useState<number | null>(null);
+  const [playerCardsById, setPlayerCardsById] = useState<Record<number, PlayerCardResponse>>({});
   const [isCardClosing, setIsCardClosing] = useState(false);
 
   useEffect(() => {
@@ -299,8 +304,17 @@ export default function HomePage() {
     setIsCardClosing(false);
     setCardLoading(true);
     setCardError(null);
+
+    const cachedCard = playerCardsById[playerId];
+    if (cachedCard) {
+      setSelectedCard(cachedCard);
+      setCardLoading(false);
+      return;
+    }
+
     try {
       const card = await fetchPlayerCard(playerId);
+      setPlayerCardsById((current) => ({ ...current, [playerId]: card }));
       setSelectedCard(card);
     } catch (err) {
       setCardError(err instanceof Error ? err.message : "Failed to load player card.");
@@ -322,6 +336,57 @@ export default function HomePage() {
   };
 
   const hasVisiblePlayers = sortedTablePlayers.length > 0;
+  const selectedMatchupTeams = useMemo(() => {
+    if (!selectedMatchup) return null;
+    const [awayTeam, homeTeam] = selectedMatchup.split("-");
+    if (!awayTeam || !homeTeam) return null;
+    return { awayTeam, homeTeam };
+  }, [selectedMatchup]);
+  const selectedGame = useMemo(() => {
+    if (!data || !selectedMatchupTeams) return null;
+    return (
+      data.games.find(
+        (game) =>
+          game.home_team === selectedMatchupTeams.homeTeam &&
+          game.away_team === selectedMatchupTeams.awayTeam,
+      ) ?? null
+    );
+  }, [data, selectedMatchupTeams]);
+  useEffect(() => {
+    if (!selectedGame || tablePlayers.length === 0) return;
+
+    const missingIds = Array.from(new Set(tablePlayers.map((player) => player.player_id))).filter(
+      (playerId) => !playerCardsById[playerId],
+    );
+    if (missingIds.length === 0) return;
+
+    let cancelled = false;
+    void Promise.allSettled(
+      missingIds.map(async (playerId) => {
+        try {
+          const card = await fetchPlayerCard(playerId);
+          if (cancelled) return;
+          setPlayerCardsById((current) => (current[playerId] ? current : { ...current, [playerId]: card }));
+        } catch {
+          // Keep panel cells blank when card lookup fails.
+        }
+      }),
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedGame, tablePlayers, playerCardsById]);
+  const matchupPanels = useMemo(
+    () => buildMatchupPanels(selectedGame, tablePlayers, playerCardsById),
+    [selectedGame, tablePlayers, playerCardsById],
+  );
+  // Grid requires an actual selected game; otherwise force table-only mode.
+  const canUseGrid = Boolean(selectedGame);
+  const defaultView: MatchupView = canUseGrid ? "grid" : "table";
+  const activeView: MatchupView = canUseGrid ? (viewOverride ?? defaultView) : "table";
+  const showGrid = activeView === "grid" && canUseGrid;
+  const showTable = !showGrid;
 
   return (
     <>
@@ -452,10 +517,39 @@ export default function HomePage() {
             ) : null}
             <div className="table-toolbar">
               <h2>Player Matchups</h2>
-              <DensityToggle value={density} onChange={setDensity} />
+              <div className="toolbar-actions">
+                {canUseGrid ? (
+                  <div className="density-toggle view-toggle" role="group" aria-label="Matchup view">
+                    <button
+                      type="button"
+                      className={`density-option ${activeView === "grid" ? "active" : ""}`}
+                      onClick={() => setViewOverride("grid")}
+                      aria-pressed={activeView === "grid"}
+                    >
+                      Grid
+                    </button>
+                    <button
+                      type="button"
+                      className={`density-option ${activeView === "table" ? "active" : ""}`}
+                      onClick={() => setViewOverride("table")}
+                      aria-pressed={activeView === "table"}
+                    >
+                      Table
+                    </button>
+                  </div>
+                ) : null}
+                {showTable ? <DensityToggle value={density} onChange={setDensity} /> : null}
+              </div>
             </div>
             <RankLegend />
-            {loading ? (
+            {!loading && data && showGrid ? (
+              <MatchupGrid
+                panels={matchupPanels}
+                activePlayerRowId={activePlayerRowId}
+                onPlayerClick={(playerId) => void onPlayerClick(playerId)}
+              />
+            ) : null}
+            {loading && showTable ? (
               <>
                 <p className="status">Loading matchup data...</p>
                 <div className={`table-wrap desktop-table ${density === "compact" ? "table-compact" : "table-comfortable"}`}>
@@ -469,7 +563,7 @@ export default function HomePage() {
                         <th className="num-col">MPG</th>
                         <th className="num-col">Env</th>
                         {STATS.map((header) => (
-                          <th key={header} className="num-col">
+                          <th key={header} className="num num-col stat-col">
                             {header}
                           </th>
                         ))}
@@ -485,7 +579,7 @@ export default function HomePage() {
                           <td className="num-cell"><span className="skeleton-block skeleton-chip" /></td>
                           <td className="num-cell"><span className="skeleton-block skeleton-chip" /></td>
                           {STATS.map((stat) => (
-                            <td key={`skeleton-${index}-${stat}`} className="num-cell">
+                            <td key={`skeleton-${index}-${stat}`} className="num num-cell stat-col">
                               <span className="skeleton-block skeleton-pill" />
                             </td>
                           ))}
@@ -517,7 +611,7 @@ export default function HomePage() {
                 </div>
               </>
             ) : null}
-            {!loading && data && hasVisiblePlayers ? (
+            {!loading && data && showTable && hasVisiblePlayers ? (
               <>
                 <div className={`table-wrap desktop-table ${density === "compact" ? "table-compact" : "table-comfortable"}`}>
                   <table>
@@ -543,18 +637,18 @@ export default function HomePage() {
                             Pos{sortLabel("position_group")}
                           </button>
                         </th>
-                        <th className="num-col">
+                        <th className="num num-col">
                           <button type="button" className="sort-button" onClick={() => onSort("avg_minutes")}>
                             MPG{sortLabel("avg_minutes")}
                           </button>
                         </th>
-                        <th className="num-col">
+                        <th className="num num-col">
                           <button type="button" className="sort-button" onClick={() => onSort("environment_score")}>
                             Env{sortLabel("environment_score")}
                           </button>
                         </th>
                         {STATS.map((header) => (
-                          <th key={header} className="num-col">
+                          <th key={header} className="num num-col stat-col">
                             <button type="button" className="sort-button" onClick={() => onSort(header as SortKey)}>
                               {header}
                               {sortLabel(header as SortKey)}
@@ -577,15 +671,14 @@ export default function HomePage() {
                           <td>{player.team}</td>
                           <td>{player.opponent}</td>
                           <td>{player.position_group}</td>
-                          <td className="num-cell">{player.avg_minutes.toFixed(1)}</td>
-                          <td className="num-cell">{player.environment_score.toFixed(1)}</td>
+                          <td className="num num-cell">{player.avg_minutes.toFixed(1)}</td>
+                          <td className="num num-cell">{player.environment_score.toFixed(1)}</td>
                           {STATS.map((name) => {
                             const tierValue = player.stat_tiers[name] ?? "red";
                             const rank = player.stat_ranks[name] ?? 30;
-                            const allowed = player.stat_allowed[name] ?? 0;
                             return (
-                              <td key={`${player.player_id}-${name}`} className="num-cell">
-                                <RankPill tier={tierValue} rank={rank} allowed={allowed} />
+                              <td key={`${player.player_id}-${name}`} className="num num-cell stat-col">
+                                <RankPill tier={tierValue} rank={rank} />
                               </td>
                             );
                           })}
@@ -620,11 +713,10 @@ export default function HomePage() {
                         {STATS.map((name) => {
                           const tierValue = player.stat_tiers[name] ?? "red";
                           const rank = player.stat_ranks[name] ?? 30;
-                          const allowed = player.stat_allowed[name] ?? 0;
                           return (
                             <p key={`${player.player_id}-${name}-mobile`}>
                               <strong>{name}</strong>
-                              <RankPill tier={tierValue} rank={rank} allowed={allowed} />
+                              <RankPill tier={tierValue} rank={rank} />
                             </p>
                           );
                         })}
@@ -634,7 +726,7 @@ export default function HomePage() {
                 </div>
               </>
             ) : null}
-            {!loading && data && !hasVisiblePlayers ? (
+            {!loading && data && showTable && !hasVisiblePlayers ? (
               <div className="empty-state">
                 <h3>No players match this filter</h3>
                 <p>Clear the matchup or search filters to see the full slate.</p>

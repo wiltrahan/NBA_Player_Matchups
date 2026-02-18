@@ -40,7 +40,6 @@ class SnapshotStoreTests(unittest.TestCase):
                         avg_minutes=31.2,
                         environment_score=62.3,
                         stat_ranks={"PTS": 5},
-                        stat_allowed={"PTS": 25.1},
                         stat_tiers={"PTS": MatchupTier.green},
                     )
                 ],

@@ -13,9 +13,8 @@ TeamGroupRank = Dict[str, Dict[PositionGroup, Dict[str, int]]]
 def build_rank_tables(
     team_group_stats: TeamGroupStat,
     teams: Iterable[str],
-) -> tuple[TeamGroupRank, TeamGroupStat]:
+) -> TeamGroupRank:
     ranks: TeamGroupRank = defaultdict(lambda: defaultdict(dict))
-    allowed: TeamGroupStat = defaultdict(lambda: defaultdict(dict))
 
     groups = [PositionGroup.guards, PositionGroup.forwards, PositionGroup.centers]
 
@@ -27,11 +26,10 @@ def build_rank_tables(
                 values.append((team, value))
 
             values.sort(key=lambda item: item[1], reverse=True)
-            for index, (team, value) in enumerate(values, start=1):
+            for index, (team, _) in enumerate(values, start=1):
                 ranks[team][group][stat] = index
-                allowed[team][group][stat] = round(float(value), 3)
 
-    return ranks, allowed
+    return ranks
 
 
 def build_environment_scores(

@@ -49,7 +49,6 @@ class PlayerMatchup(BaseModel):
     injury_status: Optional[str] = None
     environment_score: float
     stat_ranks: Dict[str, int] = Field(default_factory=dict)
-    stat_allowed: Dict[str, float] = Field(default_factory=dict)
     stat_tiers: Dict[str, MatchupTier] = Field(default_factory=dict)
 
 
