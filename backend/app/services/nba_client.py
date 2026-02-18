@@ -528,8 +528,8 @@ class NBADataService:
         )
         dvp_elapsed = perf_counter() - started
 
-        season_ranks, season_allowed = build_rank_tables(team_group_stats=season_stats, teams=self.team_abbrs)
-        last10_ranks, last10_allowed = build_rank_tables(team_group_stats=last10_stats, teams=self.team_abbrs)
+        season_ranks = build_rank_tables(team_group_stats=season_stats, teams=self.team_abbrs)
+        last10_ranks = build_rank_tables(team_group_stats=last10_stats, teams=self.team_abbrs)
 
         season_team_metrics, last10_team_metrics = self._build_team_environment_metrics(team_logs)
         season_environment = build_environment_scores(season_team_metrics, self.team_abbrs)
@@ -558,12 +558,10 @@ class NBADataService:
             "player_cards": player_cards,
             "season": {
                 "ranks": season_ranks,
-                "allowed": season_allowed,
                 "environment": season_environment,
             },
             "last10": {
                 "ranks": last10_ranks,
-                "allowed": last10_allowed,
                 "environment": last10_environment,
             },
         }

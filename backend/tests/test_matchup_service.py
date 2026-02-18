@@ -62,16 +62,10 @@ class FakeNBADataService:
             ],
             "season": {
                 "ranks": {"CHI": {"Guards": {"PTS": 5, "REB": 10, "AST": 7, "FG3M": 4, "STL": 11, "BLK": 18}}},
-                "allowed": {
-                    "CHI": {"Guards": {"PTS": 25.1, "REB": 5.2, "AST": 7.7, "FG3M": 2.9, "STL": 1.2, "BLK": 0.5}}
-                },
                 "environment": {"CHI": 62.3},
             },
             "last10": {
                 "ranks": {"CHI": {"Guards": {"PTS": 8, "REB": 11, "AST": 9, "FG3M": 6, "STL": 10, "BLK": 17}}},
-                "allowed": {
-                    "CHI": {"Guards": {"PTS": 23.1, "REB": 4.8, "AST": 6.7, "FG3M": 2.5, "STL": 1.0, "BLK": 0.4}}
-                },
                 "environment": {"CHI": 58.1},
             },
         }

@@ -28,7 +28,6 @@ export interface PlayerMatchup {
   injury_status?: string | null;
   environment_score: number;
   stat_ranks: Record<string, number>;
-  stat_allowed: Record<string, number>;
   stat_tiers: Record<string, Tier>;
 }
 

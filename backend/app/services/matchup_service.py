@@ -155,8 +155,8 @@ class MatchupService:
                 )
                 snapshot = {
                     "rotation_pool": [],
-                    "season": {"ranks": {}, "allowed": {}, "environment": {}},
-                    "last10": {"ranks": {}, "allowed": {}, "environment": {}},
+                    "season": {"ranks": {}, "environment": {}},
+                    "last10": {"ranks": {}, "environment": {}},
                 }
             self.cache.set(snapshot_cache_key, snapshot)
             self._logger.info(
@@ -169,7 +169,6 @@ class MatchupService:
 
         window_payload = snapshot[window.value]
         ranks = window_payload["ranks"]
-        allowed = window_payload["allowed"]
         environment = window_payload["environment"]
 
         injury_lookup: Dict[tuple[str, str], str] = {}
@@ -188,15 +187,12 @@ class MatchupService:
 
             group = player["position_group"]
             stat_ranks: Dict[str, int] = {}
-            stat_allowed: Dict[str, float] = {}
             stat_tiers = {}
 
             for stat_key in SUPPORTED_STATS:
                 display_stat = DISPLAY_STATS[stat_key]
                 rank = int(ranks.get(opponent, {}).get(group, {}).get(stat_key, 30))
-                value = float(allowed.get(opponent, {}).get(group, {}).get(stat_key, 0.0))
                 stat_ranks[display_stat] = rank
-                stat_allowed[display_stat] = round(value, 3)
                 stat_tiers[display_stat] = to_tier(rank)
 
             players.append(
@@ -210,7 +206,6 @@ class MatchupService:
                     injury_status=injury_lookup.get((team, player["player_name"].upper())),
                     environment_score=float(environment.get(opponent, 50.0)),
                     stat_ranks=stat_ranks,
-                    stat_allowed=stat_allowed,
                     stat_tiers=stat_tiers,
                 )
             )

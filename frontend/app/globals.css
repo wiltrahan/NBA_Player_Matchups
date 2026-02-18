@@ -663,6 +663,290 @@ button {
   background: linear-gradient(to left, var(--color-surface), transparent);
 }
 
+.matchup-grid-wrap {
+  margin-top: var(--space-24);
+  display: grid;
+  gap: var(--space-12);
+}
+
+.matchup-grid-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-12);
+}
+
+.matchup-panel {
+  --matchup-divider-color: color-mix(in srgb, var(--color-border) 74%, transparent);
+  margin-top: 0;
+  padding: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  transition:
+    transform 140ms var(--ease-premium),
+    box-shadow 140ms var(--ease-premium),
+    border-color 140ms var(--ease-premium);
+}
+
+.matchup-panel:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    var(--shadow-soft-md),
+    inset 0 1px 0 color-mix(in srgb, var(--color-surface-2) 28%, transparent);
+}
+
+.matchup-panel-header {
+  padding: var(--space-16) var(--space-12) var(--space-16);
+  border-bottom: 1px solid var(--matchup-divider-color);
+  text-align: center;
+}
+
+.matchup-panel-header h3 {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.matchup-panel-content {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--space-4);
+  min-height: 0;
+}
+
+.matchup-panel__ranks {
+  padding-top: var(--space-4);
+}
+
+.matchup-panel__table {
+  padding-top: 0;
+}
+
+.matchup-scroll-area,
+.matchup-panel-scroll {
+  max-height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.matchup-rank-strip {
+  padding: var(--space-4) var(--space-12) var(--space-8);
+  border-bottom: 1px solid var(--matchup-divider-color);
+}
+
+.matchup-rank-strip-inner {
+  border: 1px solid color-mix(in srgb, var(--color-border) 68%, transparent);
+  border-radius: var(--radius-12);
+  background: color-mix(in srgb, var(--color-surface) 88%, var(--color-surface-2));
+  padding: var(--space-8) var(--space-4);
+}
+
+.matchup-panel table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.86rem;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.matchup-rank-table th,
+.matchup-rank-table td {
+  text-align: center;
+  border-bottom: 0;
+  padding: var(--space-8) var(--space-8);
+}
+
+.matchup-rank-table thead tr,
+.matchup-rank-table tbody tr {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  column-gap: var(--space-8);
+}
+
+.matchup-rank-table th {
+  position: static;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  background: transparent;
+}
+
+.matchup-rank-table th:first-child,
+.matchup-rank-table td:first-child {
+  position: static;
+  left: auto;
+  box-shadow: none;
+}
+
+.matchup-rank-table .rank-pill-wrap {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: 24px;
+}
+
+.matchup-rank-table {
+  font-variant-numeric: tabular-nums;
+}
+
+.matchup-rank-empty {
+  display: inline-grid;
+  justify-items: center;
+  align-items: center;
+  min-height: 24px;
+}
+
+.matchup-player-table,
+.matchup-player-list {
+  table-layout: auto;
+}
+
+.matchup-player-table-wrap {
+  border-top: 0;
+}
+
+.matchup-player-table thead th {
+  top: 0;
+  z-index: 2;
+  background: var(--color-surface);
+  color: color-mix(in srgb, var(--color-muted) 78%, transparent);
+  font-size: 0.68rem;
+  font-weight: 580;
+  padding-top: var(--space-8);
+  padding-bottom: var(--space-8);
+  border-bottom: 1px solid var(--matchup-divider-color);
+}
+
+.matchup-player-table thead th:first-child {
+  position: sticky;
+  left: auto;
+  z-index: 3;
+  background: var(--color-surface);
+  box-shadow: none;
+}
+
+.matchup-player-table tbody td:first-child {
+  position: static;
+  left: auto;
+  box-shadow: none;
+}
+
+.matchup-player-table th:nth-child(1),
+.matchup-player-table td:nth-child(1) {
+  text-align: left;
+  padding-right: var(--space-24);
+}
+
+.matchup-player-table th:nth-child(n + 2),
+.matchup-player-table td:nth-child(n + 2) {
+  text-align: right;
+  min-width: 62px;
+  padding-left: var(--space-8);
+}
+
+.matchup-player-table th:nth-child(2),
+.matchup-player-table td:nth-child(2) {
+  padding-left: var(--space-16);
+}
+
+.matchup-player-table thead th,
+.matchup-player-table tbody td {
+  padding-left: var(--space-12);
+  padding-right: var(--space-12);
+}
+
+.matchup-player-table tbody td {
+  padding-top: calc(var(--space-16) + var(--space-4));
+  padding-bottom: calc(var(--space-16) + var(--space-4));
+  border-bottom: 1px solid var(--matchup-divider-color);
+}
+
+.matchup-player-name {
+  width: 100%;
+  max-width: 100%;
+  min-height: auto;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 540;
+  line-height: 1.35;
+  text-align: left;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-6);
+  min-width: 0;
+  cursor: pointer;
+}
+
+.matchup-player-name:hover {
+  text-decoration: underline;
+}
+
+.matchup-player-table .matchup-row td {
+  font-variant-numeric: tabular-nums;
+  transition:
+    background-color 120ms var(--ease-premium),
+    box-shadow 120ms var(--ease-premium),
+    border-radius 120ms var(--ease-premium),
+    color 120ms var(--ease-premium);
+}
+
+.matchup-player-table .num-col,
+.matchup-player-table .num-cell {
+  text-align: right;
+}
+
+.matchup-player-table .num-cell {
+  font-size: 0.84rem;
+  font-weight: 500;
+}
+
+.matchup-player-table .matchup-row:hover td {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  box-shadow:
+    inset 0 2px 0 var(--color-surface),
+    inset 0 -2px 0 var(--color-surface);
+  transform: none;
+}
+
+.matchup-player-table .matchup-row:hover td:first-child {
+  border-radius: var(--radius-12) 0 0 var(--radius-12);
+}
+
+.matchup-player-table .matchup-row:hover td:last-child {
+  border-radius: 0 var(--radius-12) var(--radius-12) 0;
+}
+
+.matchup-player-table .matchup-row.is-active td {
+  transform: none;
+}
+
+:root[data-theme="dark"] .matchup-player-table .matchup-row:hover td {
+  box-shadow:
+    inset 0 2px 0 var(--color-surface),
+    inset 0 -2px 0 var(--color-surface);
+}
+
+.matchup-empty {
+  padding: var(--space-12) !important;
+  font-size: 0.84rem;
+  color: var(--color-muted);
+  text-align: left !important;
+}
+
 .data-panel {
   padding: 0;
   overflow: hidden;
@@ -670,7 +954,7 @@ button {
 
 .table-toolbar {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   gap: var(--space-12);
   padding: var(--space-12);
@@ -682,6 +966,12 @@ button {
   color: var(--color-muted);
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.toolbar-actions {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: var(--space-8);
 }
 
 .density-toggle {
@@ -770,6 +1060,22 @@ th {
   font: inherit;
   text-transform: inherit;
   letter-spacing: inherit;
+}
+
+.stat-col {
+  text-align: center !important;
+}
+
+.stat-col .sort-button {
+  width: 100%;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.stat-col .rank-pill-wrap {
+  width: 100%;
+  display: flex;
+  justify-content: center;
 }
 
 .player-row {
@@ -1041,6 +1347,7 @@ tbody td:first-child {
   align-items: center;
   gap: var(--space-8);
   padding: var(--space-8) var(--space-12);
+  margin-top: var(--space-4);
   border-bottom: 1px solid var(--color-border);
   color: var(--color-muted);
   font-size: 0.76rem;
@@ -1109,7 +1416,7 @@ tbody td:first-child {
   display: block;
   font-size: 0.7rem;
   letter-spacing: 0.01em;
-  color: var(--color-muted);
+  color: color-mix(in srgb, var(--color-muted) 86%, transparent);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1476,6 +1783,10 @@ tbody td:first-child {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .matchup-grid-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .table-toolbar {
     padding: var(--space-16);
   }
@@ -1524,6 +1835,10 @@ tbody td:first-child {
     display: none;
   }
 
+  .matchup-grid-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .desktop-table {
     display: block;
   }
@@ -1562,5 +1877,14 @@ tbody td:first-child {
   .app-header,
   .panel {
     animation: none !important;
+  }
+
+  .matchup-panel,
+  .matchup-player-table .matchup-row td {
+    transition: none !important;
+  }
+
+  .matchup-panel:hover {
+    transform: none !important;
   }
 }
