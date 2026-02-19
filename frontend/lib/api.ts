@@ -1,4 +1,4 @@
-import type { MatchupResponse, MetaResponse, PlayerCardResponse, WindowType } from "./types";
+import type { GameLinesResponse, MatchupResponse, MetaResponse, PlayerCardResponse, WindowType } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
@@ -40,8 +40,17 @@ export async function fetchMatchups(query: MatchupQuery): Promise<MatchupRespons
   return (await response.json()) as MatchupResponse;
 }
 
-export async function refreshSlate(date: string): Promise<void> {
+export async function fetchGameLines(date: string): Promise<GameLinesResponse> {
   const params = new URLSearchParams({ date });
+  const response = await fetch(`${API_BASE}/api/game-lines?${params.toString()}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw await buildError("Game lines request failed", response);
+  }
+  return (await response.json()) as GameLinesResponse;
+}
+
+export async function refreshSlate(date: string): Promise<void> {
+  const params = new URLSearchParams({ date, recompute: "true" });
   const response = await fetch(`${API_BASE}/api/refresh?${params.toString()}`, {
     method: "POST",
     cache: "no-store",
@@ -52,10 +61,13 @@ export async function refreshSlate(date: string): Promise<void> {
   }
 }
 
-export async function fetchPlayerCard(playerId: number): Promise<PlayerCardResponse> {
+export async function fetchPlayerCard(playerId: number, date?: string): Promise<PlayerCardResponse> {
   const params = new URLSearchParams({
     player_id: String(playerId),
   });
+  if (date) {
+    params.set("date", date);
+  }
   const response = await fetch(`${API_BASE}/api/player-card?${params.toString()}`, { cache: "no-store" });
   if (!response.ok) {
     throw await buildError("Player card request failed", response);

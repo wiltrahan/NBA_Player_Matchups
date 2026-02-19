@@ -587,10 +587,10 @@ button {
 .game-pill {
   flex: 0 0 auto;
   width: auto;
-  min-height: 48px;
+  min-height: 56px;
   scroll-snap-align: start;
   border: 1px solid transparent;
-  padding: 0 var(--space-16);
+  padding: var(--space-8) var(--space-16);
   border-radius: 999px;
   border-color: transparent;
   background: var(--color-surface-2);
@@ -599,11 +599,35 @@ button {
   letter-spacing: 0.02em;
   position: relative;
   overflow: hidden;
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 2px;
   transition:
     background-color 170ms var(--ease-premium),
     border-color 170ms var(--ease-premium),
     color 170ms var(--ease-premium),
     transform 120ms var(--ease-premium);
+}
+
+.game-pill-matchup {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.game-pill-lines {
+  display: inline-flex;
+  gap: var(--space-8);
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--color-muted) 88%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.game-pill.active .game-pill-lines {
+  color: color-mix(in srgb, var(--color-text) 92%, transparent);
 }
 
 .game-pill::after {
@@ -679,7 +703,7 @@ button {
   --matchup-divider-color: color-mix(in srgb, var(--color-border) 74%, transparent);
   margin-top: 0;
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   transition:
@@ -1105,7 +1129,6 @@ th {
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-accent) 22%, transparent),
     inset 0 -1px 0 color-mix(in srgb, var(--color-accent) 22%, transparent),
     var(--shadow-soft-lg);
-  transform: translateY(-1px);
 }
 
 .player-row.is-active td {
@@ -1146,10 +1169,12 @@ tbody td:first-child {
 
 .player-row:hover td:first-child {
   background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  z-index: 12;
 }
 
 .player-row.is-active td:first-child {
   background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface));
+  z-index: 12;
 }
 
 .mobile-cards {
@@ -1452,6 +1477,66 @@ tbody td:first-child {
   color: var(--color-danger);
 }
 
+.injury-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  isolation: isolate;
+  width: 1rem;
+  height: 1rem;
+  margin-left: var(--space-8);
+  padding: 0;
+  background: transparent;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 55%, var(--color-border));
+  color: var(--color-danger);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: middle;
+  z-index: 18;
+}
+
+.injury-tooltip {
+  position: fixed;
+  width: min(500px, calc(100dvw - 24px));
+  max-height: min(46vh, 360px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--space-12) var(--space-12);
+  border-radius: var(--radius-16);
+  border: 1px solid color-mix(in srgb, var(--color-border) 68%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 86%, var(--color-surface-2));
+  box-shadow:
+    var(--shadow-soft-md),
+    inset 0 1px 0 color-mix(in srgb, var(--color-surface-2) 26%, transparent);
+  color: var(--color-text);
+  font-size: 0.86rem;
+  font-weight: 480;
+  line-height: 1.42;
+  letter-spacing: 0.005em;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  z-index: 1200;
+}
+
+.injury-icon--danger {
+  border-color: color-mix(in srgb, var(--color-danger) 55%, var(--color-border));
+  color: var(--color-danger);
+}
+
+.injury-icon--warning {
+  border-color: color-mix(in srgb, var(--color-warning) 60%, var(--color-border));
+  color: var(--color-warning);
+}
+
+.injury-icon--success {
+  border-color: color-mix(in srgb, var(--color-success) 60%, var(--color-border));
+  color: var(--color-success);
+}
+
 .injuries h2 {
   margin-bottom: var(--space-12);
   font-size: 0.95rem;
@@ -1498,10 +1583,7 @@ tbody td:first-child {
   margin: 0;
   border-radius: var(--radius-20);
   animation: modal-in 160ms var(--ease-premium) both;
-  border-top: 2px solid color-mix(in srgb, var(--team-accent, var(--color-accent)) 66%, transparent);
-  box-shadow:
-    var(--shadow-soft-md),
-    inset 0 1px 0 color-mix(in srgb, var(--team-accent, var(--color-accent)) 18%, transparent);
+  box-shadow: var(--shadow-soft-md);
 }
 
 .card-overlay.is-closing .player-card {
@@ -1520,7 +1602,6 @@ tbody td:first-child {
 .player-card-identity h2 {
   font-size: clamp(1.35rem, 2vw, 1.7rem);
   letter-spacing: -0.02em;
-  text-shadow: 0 0 0 color-mix(in srgb, var(--team-accent, var(--color-accent)) 0%, transparent);
 }
 
 .player-card-close {
@@ -1564,11 +1645,6 @@ tbody td:first-child {
       color-mix(in srgb, var(--color-accent) 8%, var(--color-surface-2)) 0%,
       var(--color-surface-2) 100%
     );
-}
-
-.player-kpi.is-emphasis {
-  border-color: color-mix(in srgb, var(--team-accent, var(--color-accent)) 42%, var(--color-border));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--team-accent, var(--color-accent)) 16%, transparent);
 }
 
 .player-kpi span {
@@ -1641,11 +1717,6 @@ tbody td:first-child {
   border-radius: var(--radius-12);
   background: color-mix(in srgb, var(--color-surface) 84%, var(--color-surface-2));
   font-variant-numeric: tabular-nums;
-}
-
-.player-card-grid p.is-emphasis {
-  border-color: color-mix(in srgb, var(--team-accent, var(--color-accent)) 36%, var(--color-border));
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--team-accent, var(--color-accent)) 18%, transparent);
 }
 
 .player-card-grid p span {

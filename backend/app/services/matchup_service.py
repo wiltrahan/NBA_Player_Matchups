@@ -6,6 +6,7 @@ from time import perf_counter
 from typing import Dict, List
 
 from app.models import (
+    GameLinesResponse,
     MatchupResponse,
     PlayerCardResponse,
     PlayerMatchup,
@@ -15,7 +16,9 @@ from app.models import (
 from app.services.cache import InMemoryCache
 from app.services.injury_service import InjuryService
 from app.services.nba_client import NBADataService
+from app.services.odds_api_service import OddsAPIService
 from app.services.snapshot_store import SnapshotStore
+from app.services.sports_mcp_service import SportsMCPService
 from app.utils import (
     DISPLAY_STATS,
     SUPPORTED_STATS,
@@ -34,12 +37,16 @@ class MatchupService:
         injury_service: InjuryService,
         cache: InMemoryCache,
         snapshot_store: SnapshotStore,
+        sports_mcp_service: SportsMCPService | None = None,
+        odds_api_service: OddsAPIService | None = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
         self.nba_service = nba_service
         self.injury_service = injury_service
         self.cache = cache
         self.snapshot_store = snapshot_store
+        self.sports_mcp_service = sports_mcp_service or SportsMCPService()
+        self.odds_api_service = odds_api_service or OddsAPIService()
 
     async def get_matchups(
         self,
@@ -67,29 +74,87 @@ class MatchupService:
                 )
             self.cache.set(base_cache_key, base_response)
 
+        try:
+            live_injuries = await self.injury_service.fetch_injuries(slate_date)
+        except Exception as exc:
+            self._logger.warning("Live injury overlay failed for %s: %s", slate_date.isoformat(), exc)
+            live_injuries = base_response.injuries
+
+        return self._with_injury_overlay(base_response=base_response, injuries=live_injuries)
+
+    def _with_injury_overlay(self, base_response: MatchupResponse, injuries: List) -> MatchupResponse:
+        injury_lookup_by_team_name: Dict[tuple[str, str], str] = {}
+        injury_lookup_by_name: Dict[str, str] = {}
+        for injury in injuries:
+            normalized_name = injury.player_name.upper()
+            injury_lookup_by_team_name[(injury.team.upper(), normalized_name)] = injury.status
+            injury_lookup_by_name[normalized_name] = injury.status
+
+        players: List[PlayerMatchup] = []
+        for player in base_response.players:
+            normalized_name = player.player_name.upper()
+            status = injury_lookup_by_team_name.get((player.team.upper(), normalized_name))
+            if status is None:
+                status = injury_lookup_by_name.get(normalized_name)
+            players.append(
+                PlayerMatchup(
+                    player_id=player.player_id,
+                    player_name=player.player_name,
+                    team=player.team,
+                    opponent=player.opponent,
+                    position_group=player.position_group,
+                    avg_minutes=player.avg_minutes,
+                    injury_status=status,
+                    environment_score=player.environment_score,
+                    stat_ranks=player.stat_ranks,
+                    stat_tiers=player.stat_tiers,
+                )
+            )
+
         return MatchupResponse(
             slate_date=base_response.slate_date,
             as_of_date=base_response.as_of_date,
             window=base_response.window,
             games=base_response.games,
-            injuries=base_response.injuries,
-            players=base_response.players,
+            injuries=injuries,
+            players=players,
         )
 
     async def refresh(self, slate_date: date, recompute: bool) -> RefreshResponse:
         date_key = slate_date.isoformat()
         cleared = 0
-        cleared += self.cache.invalidate_prefix(f"matchups:{date_key}:")
-        cleared += self.snapshot_store.delete_slate(slate_date)
+        existing_season = self.snapshot_store.get(slate_date=slate_date, window=Window.season)
+        existing_last10 = self.snapshot_store.get(slate_date=slate_date, window=Window.last10)
 
+        cleared += self.cache.invalidate_prefix(f"matchups:{date_key}:")
         as_of_date = as_of_date_for_slate(slate_date)
         season = season_label_for_date(slate_date)
         snapshot_key = f"snapshot:{season}:{as_of_date.isoformat()}"
         cleared += self.cache.invalidate_prefix(snapshot_key)
 
         if recompute:
-            await self.get_matchups(slate_date=slate_date, window=Window.season)
-            await self.get_matchups(slate_date=slate_date, window=Window.last10)
+            season_response = await self._compute_matchups(slate_date=slate_date, window=Window.season)
+            last10_response = await self._compute_matchups(slate_date=slate_date, window=Window.last10)
+
+            if existing_season is not None and not season_response.games and existing_season.games:
+                self._logger.warning(
+                    "Recompute produced empty season slate for %s; preserving existing snapshot.",
+                    slate_date.isoformat(),
+                )
+                season_response = existing_season
+            if existing_last10 is not None and not last10_response.games and existing_last10.games:
+                self._logger.warning(
+                    "Recompute produced empty last10 slate for %s; preserving existing snapshot.",
+                    slate_date.isoformat(),
+                )
+                last10_response = existing_last10
+
+            self.snapshot_store.upsert(season_response)
+            self.snapshot_store.upsert(last10_response)
+            self.cache.set(f"matchups:{date_key}:{Window.season.value}", season_response)
+            self.cache.set(f"matchups:{date_key}:{Window.last10.value}", last10_response)
+        else:
+            cleared += self.snapshot_store.delete_slate(slate_date)
 
         return RefreshResponse(slate_date=slate_date, cleared_keys=cleared, recomputed=recompute)
 
@@ -104,14 +169,38 @@ class MatchupService:
             "season_end": season_end,
         }
 
-    async def get_player_card(self, player_id: int) -> PlayerCardResponse | None:
-        card = self.snapshot_store.get_latest_player_card(player_id=player_id)
+    async def get_player_card(self, player_id: int, slate_date: date | None = None) -> PlayerCardResponse | None:
+        if slate_date is not None:
+            card = self.snapshot_store.get_player_card_as_of(player_id=player_id, as_of_date=slate_date)
+        else:
+            card = self.snapshot_store.get_latest_player_card(player_id=player_id)
         if card is not None:
             return card
 
         # Best-effort population on cold start.
-        await self.get_matchups(slate_date=current_et_date(), window=Window.season)
+        target_date = slate_date or current_et_date()
+        await self.get_matchups(slate_date=target_date, window=Window.season)
+        if slate_date is not None:
+            return self.snapshot_store.get_player_card_as_of(player_id=player_id, as_of_date=slate_date)
         return self.snapshot_store.get_latest_player_card(player_id=player_id)
+
+    async def get_game_lines(self, slate_date: date) -> GameLinesResponse:
+        cache_key = f"game-lines:{slate_date.isoformat()}"
+        cached = self.cache.get(cache_key)
+        if isinstance(cached, GameLinesResponse):
+            return cached
+
+        games = self.nba_service.fetch_slate_games(slate_date)
+        lines = await self.odds_api_service.fetch_game_lines(games)
+        has_live_lines = any(
+            line.away_spread is not None or line.home_spread is not None or line.game_total is not None
+            for line in lines
+        )
+        if not has_live_lines:
+            lines = await self.sports_mcp_service.fetch_game_lines(games)
+        response = GameLinesResponse(slate_date=slate_date, lines=lines)
+        self.cache.set(cache_key, response)
+        return response
 
     async def _compute_matchups(self, slate_date: date, window: Window) -> MatchupResponse:
         started = perf_counter()

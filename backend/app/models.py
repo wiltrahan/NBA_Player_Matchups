@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import Dict, List, Optional
 
@@ -37,6 +37,8 @@ class InjuryTag(BaseModel):
     team: str
     status: str
     comment: Optional[str] = None
+    source: str = "nba-cdn"
+    updated_at: Optional[datetime] = None
 
 
 class PlayerMatchup(BaseModel):
@@ -59,6 +61,21 @@ class MatchupResponse(BaseModel):
     games: List[Game]
     injuries: List[InjuryTag]
     players: List[PlayerMatchup]
+
+
+class GameLine(BaseModel):
+    game_id: str
+    away_team: str
+    home_team: str
+    away_spread: Optional[float] = None
+    home_spread: Optional[float] = None
+    game_total: Optional[float] = None
+    source: str = "mcp"
+
+
+class GameLinesResponse(BaseModel):
+    slate_date: date
+    lines: List[GameLine]
 
 
 class MetaResponse(BaseModel):

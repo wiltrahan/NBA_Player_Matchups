@@ -11,7 +11,9 @@ from app.services.cache import InMemoryCache
 from app.services.injury_service import InjuryService
 from app.services.matchup_service import MatchupService
 from app.services.nba_client import NBADataService
+from app.services.odds_api_service import OddsAPIService
 from app.services.snapshot_store import SnapshotStore
+from app.services.sports_mcp_service import SportsMCPService
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -50,11 +52,15 @@ def create_app() -> FastAPI:
     snapshot_store.initialize()
     cache_path = Path(__file__).resolve().parents[1] / ".cache" / "app_cache.pkl"
     cache = InMemoryCache(ttl_minutes=360, persist_path=str(cache_path))
+    sports_mcp_service = SportsMCPService()
+    odds_api_service = OddsAPIService()
     app.state.matchup_service = MatchupService(
         nba_service=nba_service,
         injury_service=injury_service,
         cache=cache,
         snapshot_store=snapshot_store,
+        sports_mcp_service=sports_mcp_service,
+        odds_api_service=odds_api_service,
     )
 
     @app.get("/health")

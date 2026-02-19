@@ -16,6 +16,8 @@ export interface InjuryTag {
   team: string;
   status: string;
   comment?: string | null;
+  source?: string;
+  updated_at?: string | null;
 }
 
 export interface PlayerMatchup {
@@ -38,6 +40,21 @@ export interface MatchupResponse {
   games: Game[];
   injuries: InjuryTag[];
   players: PlayerMatchup[];
+}
+
+export interface GameLine {
+  game_id: string;
+  away_team: string;
+  home_team: string;
+  away_spread?: number | null;
+  home_spread?: number | null;
+  game_total?: number | null;
+  source: string;
+}
+
+export interface GameLinesResponse {
+  slate_date: string;
+  lines: GameLine[];
 }
 
 export interface MetaResponse {

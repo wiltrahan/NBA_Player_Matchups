@@ -4,6 +4,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 import logging
+import os
 from pathlib import Path
 from time import perf_counter
 from typing import Dict, Iterable, List
@@ -26,6 +27,9 @@ class NBADataService:
     def __init__(self, enable_roster_fetch: bool = False) -> None:
         self._logger = logging.getLogger(__name__)
         self._enable_roster_fetch = enable_roster_fetch
+        self._scoreboard_timeout_seconds = float(os.getenv("NBA_SCOREBOARD_TIMEOUT_SECONDS", "15"))
+        self._scoreboard_retries = max(1, int(os.getenv("NBA_SCOREBOARD_RETRIES", "4")))
+        self._fallback_timeout_seconds = float(os.getenv("NBA_FALLBACK_TIMEOUT_SECONDS", "12"))
         self._teams = nba_teams.get_teams()
         self.id_to_abbr = {int(team["id"]): str(team["abbreviation"]).upper() for team in self._teams}
         self.abbr_to_id = {str(team["abbreviation"]).upper(): int(team["id"]) for team in self._teams}
@@ -52,13 +56,13 @@ class NBADataService:
 
     def _fetch_slate_games_from_scoreboard(self, slate_date: date) -> list[Game]:
         last_error: Exception | None = None
-        for attempt in range(1, 3):
+        for attempt in range(1, self._scoreboard_retries + 1):
             try:
                 board = scoreboardv2.ScoreboardV2(
                     game_date=slate_date.strftime("%m/%d/%Y"),
                     day_offset=0,
                     league_id="00",
-                    timeout=8,
+                    timeout=self._scoreboard_timeout_seconds,
                 )
                 frames = board.get_data_frames()
                 if not frames:
@@ -67,9 +71,10 @@ class NBADataService:
             except Exception as exc:
                 last_error = exc
                 self._logger.warning(
-                    "Scoreboard fetch failed for %s (attempt %d/2): %s",
+                    "Scoreboard fetch failed for %s (attempt %d/%d): %s",
                     slate_date.isoformat(),
                     attempt,
+                    self._scoreboard_retries,
                     exc,
                 )
         if last_error is not None:
@@ -138,7 +143,7 @@ class NBADataService:
                 season_type_nullable="Regular Season",
                 date_from_nullable=slate_date.strftime("%m/%d/%Y"),
                 date_to_nullable=slate_date.strftime("%m/%d/%Y"),
-                timeout=8,
+                timeout=self._fallback_timeout_seconds,
             )
             frames = endpoint.get_data_frames()
             if not frames:
@@ -501,6 +506,7 @@ class NBADataService:
         player_minutes = self._build_player_minutes_map(player_logs)
         roster_positions = self._build_roster_position_map(season=season, team_abbr_filter=slate_teams)
         team_roster_player_ids = self._build_team_roster_player_id_map(season=season, team_abbr_filter=slate_teams)
+        roster_team_by_player_id = self._build_roster_team_by_player_id(team_roster_player_ids)
         roster_elapsed = perf_counter() - started
 
         rotation_pool, position_map = self._build_rotation_pool(
@@ -508,12 +514,14 @@ class NBADataService:
             player_minutes=player_minutes,
             roster_positions=roster_positions,
             team_roster_player_ids=team_roster_player_ids,
+            roster_team_by_player_id=roster_team_by_player_id,
             team_filter=slate_teams,
         )
         player_cards = self._build_player_cards(
             baselines_df=player_baselines,
             player_positions=position_map,
             team_roster_player_ids=team_roster_player_ids,
+            roster_team_by_player_id=roster_team_by_player_id,
             as_of_date=as_of_date,
             season=season,
             team_filter=slate_teams,
@@ -571,6 +579,7 @@ class NBADataService:
         baselines_df: pd.DataFrame,
         player_positions: dict[int, list[PositionGroup]],
         team_roster_player_ids: dict[str, set[int]] | None,
+        roster_team_by_player_id: dict[int, str] | None,
         as_of_date: date,
         season: str,
         team_filter: set[str] | None = None,
@@ -608,7 +617,10 @@ class NBADataService:
             if not player_id:
                 continue
             player_name = str(row.get(name_col, "")).strip()
-            team = str(row.get(team_col, "")).strip().upper()
+            team = (
+                (roster_team_by_player_id or {}).get(player_id)
+                or str(row.get(team_col, "")).strip().upper()
+            )
             if team_filter and team not in team_filter:
                 continue
             roster_ids = (team_roster_player_ids or {}).get(team)
@@ -657,6 +669,7 @@ class NBADataService:
         player_minutes: dict[int, float],
         roster_positions: dict[int, list[PositionGroup]],
         team_roster_player_ids: dict[str, set[int]] | None,
+        roster_team_by_player_id: dict[int, str] | None,
         team_filter: set[str] | None = None,
     ) -> tuple[list[dict], dict[int, list[PositionGroup]]]:
         if baselines_df.empty:
@@ -695,7 +708,10 @@ class NBADataService:
         for row in baselines_df.to_dict("records"):
             player_id = int(row.get(player_id_col, 0) or 0)
             player_name = str(row.get(player_name_col, "")).strip()
-            team = str(row.get(team_col, "")).strip().upper()
+            team = (
+                (roster_team_by_player_id or {}).get(player_id)
+                or str(row.get(team_col, "")).strip().upper()
+            )
             if team_filter and team not in team_filter:
                 continue
             roster_ids = (team_roster_player_ids or {}).get(team)
@@ -758,6 +774,16 @@ class NBADataService:
             )
 
         return rotation_pool, player_positions
+
+    @staticmethod
+    def _build_roster_team_by_player_id(team_roster_player_ids: dict[str, set[int]] | None) -> dict[int, str]:
+        if not team_roster_player_ids:
+            return {}
+        roster_team_by_player_id: dict[int, str] = {}
+        for team_abbr, player_ids in team_roster_player_ids.items():
+            for player_id in player_ids:
+                roster_team_by_player_id[int(player_id)] = team_abbr
+        return roster_team_by_player_id
 
     def _build_player_minutes_map(self, player_logs_df: pd.DataFrame) -> dict[int, float]:
         if player_logs_df.empty:

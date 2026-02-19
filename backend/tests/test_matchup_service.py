@@ -120,6 +120,20 @@ class FakeSnapshotStore:
             reverse=True,
         )[0]
 
+    def get_player_card_as_of(self, player_id: int, as_of_date: date):
+        candidates = [
+            card
+            for (candidate_player_id, candidate_season, candidate_date), card in self.player_cards.items()
+            if candidate_player_id == player_id and candidate_date <= as_of_date
+        ]
+        if not candidates:
+            return None
+        return sorted(
+            candidates,
+            key=lambda card: (card.as_of_date, card.season),
+            reverse=True,
+        )[0]
+
 
 class MatchupServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_matchups_uses_cache_after_first_build(self) -> None:
@@ -197,13 +211,12 @@ class MatchupServiceTests(unittest.IsolatedAsyncioTestCase):
             snapshot_store=snapshot_store,
         )
 
-        service.get_matchups = AsyncMock()  # type: ignore[method-assign]
-        await service.refresh(slate_date=date(2026, 2, 11), recompute=True)
+        slate_date = date(2026, 2, 11)
+        await service.refresh(slate_date=slate_date, recompute=True)
 
-        self.assertEqual(service.get_matchups.await_count, 2)
-        awaited = service.get_matchups.await_args_list
-        self.assertEqual(awaited[0].kwargs["window"], Window.season)
-        self.assertEqual(awaited[1].kwargs["window"], Window.last10)
+        self.assertIn((slate_date, Window.season), snapshot_store.rows)
+        self.assertIn((slate_date, Window.last10), snapshot_store.rows)
+        self.assertGreaterEqual(snapshot_store.upsert_calls, 2)
 
     async def test_get_player_card_populates_when_missing(self) -> None:
         snapshot_store = FakeSnapshotStore()
