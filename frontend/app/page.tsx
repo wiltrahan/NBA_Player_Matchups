@@ -1,14 +1,15 @@
 "use client";
 
-import { type CSSProperties, useEffect, useMemo, useState } from "react";
-import { fetchMatchups, fetchMeta, fetchPlayerCard, refreshSlate } from "@/lib/api";
-import type { MatchupResponse, MetaResponse, PlayerCardResponse, WindowType } from "@/lib/types";
+import { useEffect, useMemo, useState } from "react";
+import { fetchGameLines, fetchMatchups, fetchMeta, fetchPlayerCard, refreshSlate } from "@/lib/api";
+import type { GameLine, MatchupResponse, MetaResponse, PlayerCardResponse, WindowType } from "@/lib/types";
 import { DensityToggle } from "./components/DensityToggle";
 import { MatchupGrid } from "./components/matchups/MatchupGrid";
 import { PageLayout } from "./components/PageLayout";
 import { RankLegend } from "./components/RankLegend";
 import { RankPill } from "./components/RankPill";
 import { ThemeToggle } from "./components/ThemeToggle";
+import { InjuryStatusBadge } from "./components/injuries/InjuryStatusBadge";
 import { Button } from "./components/controls/Button";
 import { Input } from "./components/controls/Input";
 import { Select } from "./components/controls/Select";
@@ -48,38 +49,6 @@ const TEAM_ALIASES: Record<string, string[]> = {
   WAS: ["was", "washington", "wizards", "washington wizards"],
 };
 
-const TEAM_COLORS: Record<string, string> = {
-  ATL: "#e03a3e",
-  BKN: "#7a7a7a",
-  BOS: "#007a33",
-  CHA: "#1d1160",
-  CHI: "#ce1141",
-  CLE: "#6f263d",
-  DAL: "#00538c",
-  DEN: "#0e2240",
-  DET: "#c8102e",
-  GSW: "#1d428a",
-  HOU: "#ce1141",
-  IND: "#002d62",
-  LAC: "#c8102e",
-  LAL: "#552583",
-  MEM: "#5d76a9",
-  MIA: "#98002e",
-  MIL: "#00471b",
-  MIN: "#0c2340",
-  NOP: "#0c2340",
-  NYK: "#006bb6",
-  OKC: "#007ac1",
-  ORL: "#0077c0",
-  PHI: "#006bb6",
-  PHX: "#1d1160",
-  POR: "#e03a3e",
-  SAC: "#5a2d81",
-  SAS: "#7a7a7a",
-  TOR: "#ce1141",
-  UTA: "#002b5c",
-  WAS: "#002b5c",
-};
 type SortDirection = "asc" | "desc";
 type Density = "comfortable" | "compact";
 type MatchupView = "grid" | "table";
@@ -111,6 +80,32 @@ function formatDateDisplay(value: string): string {
   return `${month}/${day}/${year}`;
 }
 
+function formatSpread(value: number | null | undefined): string {
+  if (typeof value !== "number" || Number.isNaN(value)) return "—";
+  if (value > 0) return `+${value.toFixed(1)}`;
+  return value.toFixed(1);
+}
+
+function formatFavoriteLabel(
+  awayTeam: string,
+  homeTeam: string,
+  awaySpread: number | null | undefined,
+  homeSpread: number | null | undefined,
+): string {
+  const hasAway = typeof awaySpread === "number" && !Number.isNaN(awaySpread);
+  const hasHome = typeof homeSpread === "number" && !Number.isNaN(homeSpread);
+
+  if (hasAway && awaySpread! < 0) return `${awayTeam}: ${awaySpread!.toFixed(1)}`;
+  if (hasHome && homeSpread! < 0) return `${homeTeam}: ${homeSpread!.toFixed(1)}`;
+
+  if (hasAway && awaySpread === 0) return `${awayTeam}/${homeTeam}: PK`;
+  if (hasHome && homeSpread === 0) return `${awayTeam}/${homeTeam}: PK`;
+
+  if (hasAway) return `${awayTeam}: ${formatSpread(awaySpread)}`;
+  if (hasHome) return `${homeTeam}: ${formatSpread(homeSpread)}`;
+  return "Line: —";
+}
+
 function matchesPlayerOrTeamSearch(playerName: string, teamAbbr: string, query: string): boolean {
   const normalizedQuery = normalizeSearchValue(query);
   if (!normalizedQuery) return true;
@@ -131,19 +126,6 @@ function matchesPlayerOrTeamSearch(playerName: string, teamAbbr: string, query: 
   });
 }
 
-function teamAccent(team: string): string {
-  return TEAM_COLORS[team] ?? "#4f7ce5";
-}
-
-function isPositionEmphasis(positionGroup: string, statLabel: string): boolean {
-  const byPosition: Record<string, string[]> = {
-    Guards: ["APG", "3PA/G", "3PM/G", "FT%"],
-    Forwards: ["PPG", "RPG", "FG%"],
-    Centers: ["RPG", "BPG", "FG%", "FTA/G"],
-  };
-  return (byPosition[positionGroup] ?? []).includes(statLabel);
-}
-
 function statTooltip(label: string): string | undefined {
   const tips: Record<string, string> = {
     "TOV/G": "Turnovers per game.",
@@ -154,6 +136,45 @@ function statTooltip(label: string): string | undefined {
     "FTM/G": "Free throws made per game.",
   };
   return tips[label];
+}
+
+function formatAsOfDate(value: string): string {
+  return formatDateDisplay(value);
+}
+
+function normalizeInjuryName(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]+/g, "");
+}
+
+function injuryLookupKey(team: string, playerName: string): string {
+  return `${team.toUpperCase()}|${normalizeInjuryName(playerName)}`;
+}
+
+function buildInjuryTooltip(status: string, comment?: string | null): string {
+  return comment ? `${status} - ${comment}` : status;
+}
+
+type InjuryBadge = {
+  label: string;
+  tone: "danger" | "warning" | "success";
+};
+
+function resolveInjuryBadge(status?: string | null): InjuryBadge | null {
+  const normalized = (status ?? "").toUpperCase();
+  if (!normalized) return null;
+  if (normalized.includes("OUT") || normalized.includes("SUSPENSION")) {
+    return { label: "+", tone: "danger" };
+  }
+  if (normalized.includes("DOUBT")) {
+    return { label: "D", tone: "danger" };
+  }
+  if (normalized.includes("QUESTION") || normalized.includes("GTD") || normalized.includes("DAY-TO-DAY")) {
+    return { label: "Q", tone: "warning" };
+  }
+  if (normalized.includes("PROBABLE")) {
+    return { label: "P", tone: "success" };
+  }
+  return null;
 }
 
 export default function HomePage() {
@@ -176,6 +197,7 @@ export default function HomePage() {
   const [selectedCard, setSelectedCard] = useState<PlayerCardResponse | null>(null);
   const [activePlayerRowId, setActivePlayerRowId] = useState<number | null>(null);
   const [playerCardsById, setPlayerCardsById] = useState<Record<number, PlayerCardResponse>>({});
+  const [gameLinesById, setGameLinesById] = useState<Record<string, GameLine>>({});
   const [isCardClosing, setIsCardClosing] = useState(false);
 
   useEffect(() => {
@@ -203,8 +225,20 @@ export default function HomePage() {
           window: windowType,
         });
         setData(result);
+        try {
+          const lineResult = await fetchGameLines(date);
+          setGameLinesById(
+            lineResult.lines.reduce<Record<string, GameLine>>((acc, line) => {
+              acc[line.game_id] = line;
+              return acc;
+            }, {}),
+          );
+        } catch {
+          setGameLinesById({});
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to load matchup data.");
+        setGameLinesById({});
       } finally {
         setLoading(false);
       }
@@ -267,6 +301,15 @@ export default function HomePage() {
     return rows;
   }, [tablePlayers, sortDirection, sortKey]);
 
+  const injuryTooltipByPlayer = useMemo(() => {
+    if (!data) return {} as Record<string, string>;
+    return data.injuries.reduce<Record<string, string>>((acc, injury) => {
+      acc[injuryLookupKey(injury.team, injury.player_name)] = buildInjuryTooltip(injury.status, injury.comment);
+      acc[injuryLookupKey("*", injury.player_name)] = buildInjuryTooltip(injury.status, injury.comment);
+      return acc;
+    }, {});
+  }, [data]);
+
   const onSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
@@ -292,6 +335,17 @@ export default function HomePage() {
         window: windowType,
       });
       setData(result);
+      try {
+        const lineResult = await fetchGameLines(date);
+        setGameLinesById(
+          lineResult.lines.reduce<Record<string, GameLine>>((acc, line) => {
+            acc[line.game_id] = line;
+            return acc;
+          }, {}),
+        );
+      } catch {
+        setGameLinesById({});
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Refresh failed.");
     } finally {
@@ -313,7 +367,7 @@ export default function HomePage() {
     }
 
     try {
-      const card = await fetchPlayerCard(playerId);
+      const card = await fetchPlayerCard(playerId, date);
       setPlayerCardsById((current) => ({ ...current, [playerId]: card }));
       setSelectedCard(card);
     } catch (err) {
@@ -364,7 +418,7 @@ export default function HomePage() {
     void Promise.allSettled(
       missingIds.map(async (playerId) => {
         try {
-          const card = await fetchPlayerCard(playerId);
+          const card = await fetchPlayerCard(playerId, date);
           if (cancelled) return;
           setPlayerCardsById((current) => (current[playerId] ? current : { ...current, [playerId]: card }));
         } catch {
@@ -376,10 +430,13 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedGame, tablePlayers, playerCardsById]);
+  }, [selectedGame, tablePlayers, playerCardsById, date]);
+  useEffect(() => {
+    setPlayerCardsById({});
+  }, [date]);
   const matchupPanels = useMemo(
-    () => buildMatchupPanels(selectedGame, tablePlayers, playerCardsById),
-    [selectedGame, tablePlayers, playerCardsById],
+    () => buildMatchupPanels(selectedGame, tablePlayers, playerCardsById, data?.injuries ?? []),
+    [selectedGame, tablePlayers, playerCardsById, data?.injuries],
   );
   // Grid requires an actual selected game; otherwise force table-only mode.
   const canUseGrid = Boolean(selectedGame);
@@ -486,17 +543,33 @@ export default function HomePage() {
               <div className="chip-scroll">
                 <div className="games">
                   {data.games.map((game) => (
-                    <button
-                      key={game.game_id}
-                      type="button"
-                      className={`game-pill ${selectedMatchup === `${game.away_team}-${game.home_team}` ? "active" : ""}`}
-                      onClick={() => {
-                        const key = `${game.away_team}-${game.home_team}`;
-                        setSelectedMatchup((current) => (current === key ? "" : key));
-                      }}
-                    >
-                      {game.away_team} @ {game.home_team}
-                    </button>
+                    (() => {
+                      const key = `${game.away_team}-${game.home_team}`;
+                      const line = gameLinesById[game.game_id];
+                      return (
+                        <button
+                          key={game.game_id}
+                          type="button"
+                          className={`game-pill ${selectedMatchup === key ? "active" : ""}`}
+                          onClick={() => {
+                            setSelectedMatchup((current) => (current === key ? "" : key));
+                          }}
+                        >
+                          <span className="game-pill-matchup">{game.away_team} @ {game.home_team}</span>
+                          <span className="game-pill-lines">
+                            <span>
+                              {formatFavoriteLabel(
+                                game.away_team,
+                                game.home_team,
+                                line?.away_spread,
+                                line?.home_spread,
+                              )}
+                            </span>
+                            <span>Total: {typeof line?.game_total === "number" ? line.game_total.toFixed(1) : "—"}</span>
+                          </span>
+                        </button>
+                      );
+                    })()
                   ))}
                 </div>
               </div>
@@ -666,7 +739,22 @@ export default function HomePage() {
                         >
                           <td>
                             {player.player_name}
-                            {player.injury_status ? <span className="injury">{player.injury_status}</span> : null}
+                            {(() => {
+                              const badge = resolveInjuryBadge(player.injury_status);
+                              if (!badge) return null;
+                              const tooltip =
+                                injuryTooltipByPlayer[injuryLookupKey(player.team, player.player_name)] ??
+                                injuryTooltipByPlayer[injuryLookupKey("*", player.player_name)] ??
+                                player.injury_status ??
+                                "Injury";
+                              return (
+                                <InjuryStatusBadge
+                                  label={badge.label}
+                                  tone={badge.tone}
+                                  tooltip={tooltip}
+                                />
+                              );
+                            })()}
                           </td>
                           <td>{player.team}</td>
                           <td>{player.opponent}</td>
@@ -698,7 +786,22 @@ export default function HomePage() {
                       <div className="mobile-player-top">
                         <h3>
                           {player.player_name}
-                          {player.injury_status ? <span className="injury">{player.injury_status}</span> : null}
+                          {(() => {
+                            const badge = resolveInjuryBadge(player.injury_status);
+                            if (!badge) return null;
+                            const tooltip =
+                              injuryTooltipByPlayer[injuryLookupKey(player.team, player.player_name)] ??
+                              injuryTooltipByPlayer[injuryLookupKey("*", player.player_name)] ??
+                              player.injury_status ??
+                              "Injury";
+                            return (
+                              <InjuryStatusBadge
+                                label={badge.label}
+                                tone={badge.tone}
+                                tooltip={tooltip}
+                              />
+                            );
+                          })()}
                         </h3>
                         <p>
                           {player.team} vs {player.opponent}
@@ -734,20 +837,7 @@ export default function HomePage() {
             ) : null}
           </>
         }
-        injuries={
-          !loading && data && data.injuries.length > 0 ? (
-            <>
-              <h2>Injury Notes</h2>
-              <div className="injury-grid">
-                {data.injuries.slice(0, 60).map((injuryItem) => (
-                  <p key={`${injuryItem.team}-${injuryItem.player_name}`}>
-                    <strong>{injuryItem.team}</strong> {injuryItem.player_name}: {injuryItem.status}
-                  </p>
-                ))}
-              </div>
-            </>
-          ) : undefined
-        }
+        injuries={undefined}
       />
 
       {cardLoading ? <p className="status">Loading player card...</p> : null}
@@ -770,7 +860,6 @@ export default function HomePage() {
         <section className={`card-overlay ${isCardClosing ? "is-closing" : "is-open"}`} onClick={closePlayerCard}>
           <article
             className="player-card panel"
-            style={{ "--team-accent": teamAccent(selectedCard.team) } as CSSProperties}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="player-card-header">
@@ -788,61 +877,51 @@ export default function HomePage() {
             </div>
 
             <div className="player-card-lead-grid">
-              <div className={`player-kpi ${isPositionEmphasis(selectedCard.position_group, "MPG") ? "is-emphasis" : ""}`}>
+              <div className="player-kpi">
                 <span>MPG</span>
                 <strong>{selectedCard.mpg.toFixed(1)}</strong>
               </div>
-              <div className={`player-kpi ${isPositionEmphasis(selectedCard.position_group, "PPG") ? "is-emphasis" : ""}`}>
+              <div className="player-kpi">
                 <span>PPG</span>
                 <strong>{selectedCard.ppg.toFixed(1)}</strong>
               </div>
-              <div className={`player-kpi ${isPositionEmphasis(selectedCard.position_group, "APG") ? "is-emphasis" : ""}`}>
+              <div className="player-kpi">
                 <span>APG</span>
                 <strong>{selectedCard.assists_pg.toFixed(1)}</strong>
               </div>
-              <div className={`player-kpi ${isPositionEmphasis(selectedCard.position_group, "RPG") ? "is-emphasis" : ""}`}>
+              <div className="player-kpi">
                 <span>RPG</span>
                 <strong>{selectedCard.rebounds_pg.toFixed(1)}</strong>
               </div>
             </div>
 
             <div className="player-card-sections">
-              <section className="player-card-block player-card-block-scoring">
-                <h3>Scoring</h3>
+              <section className="player-card-block player-card-block-usage">
+                <h3>Volume</h3>
                 <div className="player-card-grid">
-                  <p className={isPositionEmphasis(selectedCard.position_group, "PPG") ? "is-emphasis" : ""}><span title={statTooltip("PPG")}>PPG</span><strong>{selectedCard.ppg.toFixed(1)}</strong></p>
-                  <p className={isPositionEmphasis(selectedCard.position_group, "3PM/G") ? "is-emphasis" : ""}><span title={statTooltip("3PM/G")}>3PM/G</span><strong>{selectedCard.three_pm_pg.toFixed(1)}</strong></p>
-                  <p className={isPositionEmphasis(selectedCard.position_group, "FTM/G") ? "is-emphasis" : ""}><span title={statTooltip("FTM/G")}>FTM/G</span><strong>{selectedCard.ftm_pg.toFixed(1)}</strong></p>
-                  <p className={isPositionEmphasis(selectedCard.position_group, "+/-") ? "is-emphasis" : ""}><span title={statTooltip("+/-")}>+/-</span><strong>{selectedCard.plus_minus_pg.toFixed(1)}</strong></p>
+                  <p><span title={statTooltip("3PA/G")}>3PA/G</span><strong>{selectedCard.three_pa_pg.toFixed(1)}</strong></p>
+                  <p><span title={statTooltip("3PM/G")}>3PM/G</span><strong>{selectedCard.three_pm_pg.toFixed(1)}</strong></p>
+                  <p><span title={statTooltip("FTA/G")}>FTA/G</span><strong>{selectedCard.fta_pg.toFixed(1)}</strong></p>
+                  <p><span title={statTooltip("FTM/G")}>FTM/G</span><strong>{selectedCard.ftm_pg.toFixed(1)}</strong></p>
                 </div>
               </section>
 
               <section className="player-card-block player-card-block-efficiency">
                 <h3>Shooting Efficiency</h3>
                 <div className="player-card-grid player-card-grid-wide">
-                  <p className={isPositionEmphasis(selectedCard.position_group, "FG%") ? "is-emphasis" : ""}><span>FG%</span><strong>{(selectedCard.fg_pct * 100).toFixed(1)}%</strong></p>
-                  <p className={isPositionEmphasis(selectedCard.position_group, "3P%") ? "is-emphasis" : ""}><span>3P%</span><strong>{(selectedCard.three_p_pct * 100).toFixed(1)}%</strong></p>
-                  <p className={isPositionEmphasis(selectedCard.position_group, "FT%") ? "is-emphasis" : ""}><span>FT%</span><strong>{(selectedCard.ft_pct * 100).toFixed(1)}%</strong></p>
-                </div>
-              </section>
-
-              <section className="player-card-block player-card-block-usage">
-                <h3>Usage / Volume</h3>
-                <div className="player-card-grid">
-                  <p className={isPositionEmphasis(selectedCard.position_group, "MPG") ? "is-emphasis" : ""}><span>MPG</span><strong>{selectedCard.mpg.toFixed(1)}</strong></p>
-                  <p className={isPositionEmphasis(selectedCard.position_group, "3PA/G") ? "is-emphasis" : ""}><span title={statTooltip("3PA/G")}>3PA/G</span><strong>{selectedCard.three_pa_pg.toFixed(1)}</strong></p>
-                  <p className={isPositionEmphasis(selectedCard.position_group, "FTA/G") ? "is-emphasis" : ""}><span title={statTooltip("FTA/G")}>FTA/G</span><strong>{selectedCard.fta_pg.toFixed(1)}</strong></p>
-                  <p className={isPositionEmphasis(selectedCard.position_group, "TOV/G") ? "is-emphasis" : ""}><span title={statTooltip("TOV/G")}>TOV/G</span><strong>{selectedCard.turnovers_pg.toFixed(1)}</strong></p>
+                  <p><span>FG%</span><strong>{(selectedCard.fg_pct * 100).toFixed(1)}%</strong></p>
+                  <p><span>3P%</span><strong>{(selectedCard.three_p_pct * 100).toFixed(1)}%</strong></p>
+                  <p><span>FT%</span><strong>{(selectedCard.ft_pct * 100).toFixed(1)}%</strong></p>
                 </div>
               </section>
 
               <section className="player-card-block player-card-block-defense">
                 <h3>Defense / Other</h3>
-                <div className="player-card-grid player-card-grid-wide">
-                  <p className={isPositionEmphasis(selectedCard.position_group, "SPG") ? "is-emphasis" : ""}><span>SPG</span><strong>{selectedCard.steals_pg.toFixed(1)}</strong></p>
-                  <p className={isPositionEmphasis(selectedCard.position_group, "BPG") ? "is-emphasis" : ""}><span>BPG</span><strong>{selectedCard.blocks_pg.toFixed(1)}</strong></p>
-                  <p className={isPositionEmphasis(selectedCard.position_group, "RPG") ? "is-emphasis" : ""}><span>RPG</span><strong>{selectedCard.rebounds_pg.toFixed(1)}</strong></p>
-                  <p><span>As Of</span><strong>{selectedCard.as_of_date}</strong></p>
+                <div className="player-card-grid">
+                  <p><span>SPG</span><strong>{selectedCard.steals_pg.toFixed(1)}</strong></p>
+                  <p><span>BPG</span><strong>{selectedCard.blocks_pg.toFixed(1)}</strong></p>
+                  <p><span title={statTooltip("TOV/G")}>TOV/G</span><strong>{selectedCard.turnovers_pg.toFixed(1)}</strong></p>
+                  <p><span>As Of</span><strong>{formatAsOfDate(selectedCard.as_of_date)}</strong></p>
                 </div>
               </section>
             </div>

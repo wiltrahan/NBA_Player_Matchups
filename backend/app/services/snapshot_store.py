@@ -110,6 +110,39 @@ class SnapshotStore:
             plus_minus_pg=float(row[20]),
         )
 
+    def get_player_card_as_of(self, player_id: int, as_of_date: date) -> PlayerCardResponse | None:
+        if self._backend.startswith("sqlite"):
+            row = self._sqlite_get_player_card_as_of_row(player_id=player_id, as_of_date=as_of_date)
+        else:
+            row = self._postgres_get_player_card_as_of_row(player_id=player_id, as_of_date=as_of_date)
+
+        if row is None:
+            return None
+
+        return PlayerCardResponse(
+            player_id=int(row[0]),
+            player_name=str(row[1]),
+            team=str(row[2]),
+            season=str(row[3]),
+            as_of_date=date.fromisoformat(str(row[4])),
+            position_group=str(row[5]),
+            mpg=float(row[6]),
+            ppg=float(row[7]),
+            assists_pg=float(row[8]),
+            rebounds_pg=float(row[9]),
+            steals_pg=float(row[10]),
+            blocks_pg=float(row[11]),
+            three_pa_pg=float(row[12]),
+            three_pm_pg=float(row[13]),
+            fta_pg=float(row[14]),
+            ftm_pg=float(row[15]),
+            fg_pct=float(row[16]),
+            three_p_pct=float(row[17]),
+            ft_pct=float(row[18]),
+            turnovers_pg=float(row[19]),
+            plus_minus_pg=float(row[20]),
+        )
+
     def _initialize_sqlite(self) -> None:
         assert self._db_path is not None
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -350,6 +383,24 @@ class SnapshotStore:
                     (player_id,),
                 ).fetchone()
 
+    def _sqlite_get_player_card_as_of_row(self, player_id: int, as_of_date: date) -> tuple[Any, ...] | None:
+        with self._lock:
+            with self._sqlite_connect() as conn:
+                return conn.execute(
+                    """
+                    SELECT
+                        player_id, player_name, team, season, as_of_date, position_group,
+                        mpg, ppg, assists_pg, rebounds_pg, steals_pg, blocks_pg,
+                        three_pa_pg, three_pm_pg, fta_pg, ftm_pg, fg_pct, three_p_pct,
+                        ft_pct, turnovers_pg, plus_minus_pg
+                    FROM player_cards
+                    WHERE player_id = ? AND as_of_date <= ?
+                    ORDER BY as_of_date DESC, season DESC
+                    LIMIT 1
+                    """,
+                    (player_id, as_of_date.isoformat()),
+                ).fetchone()
+
     def _postgres_get_snapshot_row(self, slate_date: date, window: Window) -> Any | None:
         with self._lock:
             with self._postgres_connect() as conn:
@@ -478,6 +529,26 @@ class SnapshotStore:
                         LIMIT 1
                         """,
                         (player_id,),
+                    )
+                    return cursor.fetchone()
+
+    def _postgres_get_player_card_as_of_row(self, player_id: int, as_of_date: date) -> Any | None:
+        with self._lock:
+            with self._postgres_connect() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            player_id, player_name, team, season, as_of_date, position_group,
+                            mpg, ppg, assists_pg, rebounds_pg, steals_pg, blocks_pg,
+                            three_pa_pg, three_pm_pg, fta_pg, ftm_pg, fg_pct, three_p_pct,
+                            ft_pct, turnovers_pg, plus_minus_pg
+                        FROM player_cards
+                        WHERE player_id = %s AND as_of_date <= %s
+                        ORDER BY as_of_date DESC, season DESC
+                        LIMIT 1
+                        """,
+                        (player_id, as_of_date),
                     )
                     return cursor.fetchone()
 

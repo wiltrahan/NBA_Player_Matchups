@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.models import MatchupResponse, MetaResponse, PlayerCardResponse, RefreshResponse, Window
+from app.models import GameLinesResponse, MatchupResponse, MetaResponse, PlayerCardResponse, RefreshResponse, Window
 from app.services.matchup_service import MatchupService
 from app.utils import current_et_date
 
@@ -53,12 +53,48 @@ async def refresh(
 async def get_player_card(
     service: MatchupService = Depends(get_matchup_service),
     player_id: int = Query(alias="player_id"),
+    date_param: Optional[date] = Query(default=None, alias="date"),
 ) -> PlayerCardResponse:
     try:
-        card = await service.get_player_card(player_id=player_id)
+        card = await service.get_player_card(player_id=player_id, slate_date=date_param)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to fetch player card: {exc}") from exc
 
     if card is None:
         raise HTTPException(status_code=404, detail="Player card not found for selected date.")
     return card
+
+
+@router.get("/game-lines", response_model=GameLinesResponse)
+async def get_game_lines(
+    service: MatchupService = Depends(get_matchup_service),
+    date_param: Optional[date] = Query(default=None, alias="date"),
+) -> GameLinesResponse:
+    try:
+        target_date = date_param or current_et_date()
+        return await service.get_game_lines(slate_date=target_date)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch game lines: {exc}") from exc
+
+
+@router.get("/game-lines-debug")
+async def get_game_lines_debug(
+    service: MatchupService = Depends(get_matchup_service),
+    limit: int = Query(default=15, ge=1, le=50),
+) -> dict:
+    try:
+        return await service.sports_mcp_service.fetch_event_diagnostics(limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch game line diagnostics: {exc}") from exc
+
+
+@router.get("/injuries-debug")
+async def get_injuries_debug(
+    service: MatchupService = Depends(get_matchup_service),
+    date_param: Optional[date] = Query(default=None, alias="date"),
+) -> dict:
+    try:
+        target_date = date_param or current_et_date()
+        return await service.injury_service.fetch_injuries_debug(target_date)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch injury diagnostics: {exc}") from exc
