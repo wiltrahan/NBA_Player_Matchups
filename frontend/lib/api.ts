@@ -1,4 +1,11 @@
-import type { GameLinesResponse, MatchupResponse, MetaResponse, PlayerCardResponse, WindowType } from "./types";
+import type {
+  GameLinesResponse,
+  MatchupResponse,
+  MetaResponse,
+  PlayerCardResponse,
+  PlayerCardWindow,
+  WindowType,
+} from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
@@ -61,9 +68,14 @@ export async function refreshSlate(date: string): Promise<void> {
   }
 }
 
-export async function fetchPlayerCard(playerId: number, date?: string): Promise<PlayerCardResponse> {
+export async function fetchPlayerCard(
+  playerId: number,
+  date?: string,
+  window: PlayerCardWindow = "season",
+): Promise<PlayerCardResponse> {
   const params = new URLSearchParams({
     player_id: String(playerId),
+    window,
   });
   if (date) {
     params.set("date", date);

@@ -6,6 +6,7 @@ type MatchupPanelProps = {
   panel: MatchupPanelData;
   activePlayerRowId: number | null;
   onPlayerClick: (playerId: number) => void;
+  statsLoading?: boolean;
 };
 
 const STATS = ["PTS", "REB", "AST", "3PM", "STL", "BLK"] as const;
@@ -37,10 +38,17 @@ export function MatchupPanel({
   panel,
   activePlayerRowId,
   onPlayerClick,
+  statsLoading = false,
 }: MatchupPanelProps) {
   const { positionGroup, opponentAbbr, defenseRanks, players } = panel;
   const formatPanelStat = (value: number | null): string => {
     if (value == null || Number.isNaN(value)) return "—";
+    return value.toFixed(1);
+  };
+  const renderPanelStat = (value: number | null) => {
+    if (value == null || Number.isNaN(value)) {
+      return statsLoading ? <span className="skeleton-block skeleton-chip matchup-stat-skeleton" /> : "—";
+    }
     return value.toFixed(1);
   };
 
@@ -130,9 +138,9 @@ export function MatchupPanel({
                           </span>
                         </td>
                         <td className="num num-cell">{formatPanelStat(player.mpg)}</td>
-                        <td className="num num-cell">{formatPanelStat(player.ppg)}</td>
-                        <td className="num num-cell">{formatPanelStat(player.apg)}</td>
-                        <td className="num num-cell">{formatPanelStat(player.rpg)}</td>
+                        <td className="num num-cell">{renderPanelStat(player.ppg)}</td>
+                        <td className="num num-cell">{renderPanelStat(player.apg)}</td>
+                        <td className="num num-cell">{renderPanelStat(player.rpg)}</td>
                       </tr>
                     );
                   })

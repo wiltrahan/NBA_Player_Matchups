@@ -1,4 +1,5 @@
 export type WindowType = "season" | "last10";
+export type PlayerCardWindow = "season" | "last10" | "last5";
 
 export type PositionGroup = "Guards" | "Forwards" | "Centers";
 
@@ -70,6 +71,7 @@ export interface PlayerCardResponse {
   team: string;
   season: string;
   as_of_date: string;
+  window: PlayerCardWindow;
   position_group: PositionGroup;
   mpg: number;
   ppg: number;

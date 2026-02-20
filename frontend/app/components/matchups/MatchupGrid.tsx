@@ -5,12 +5,14 @@ type MatchupGridProps = {
   panels: MatchupPanels;
   activePlayerRowId: number | null;
   onPlayerClick: (playerId: number) => void;
+  statsLoading?: boolean;
 };
 
 export function MatchupGrid({
   panels,
   activePlayerRowId,
   onPlayerClick,
+  statsLoading = false,
 }: MatchupGridProps) {
   return (
     <div className="matchup-grid-wrap">
@@ -21,6 +23,7 @@ export function MatchupGrid({
             panel={panel}
             activePlayerRowId={activePlayerRowId}
             onPlayerClick={onPlayerClick}
+            statsLoading={statsLoading}
           />
         ))}
       </div>
@@ -32,6 +35,7 @@ export function MatchupGrid({
             panel={panel}
             activePlayerRowId={activePlayerRowId}
             onPlayerClick={onPlayerClick}
+            statsLoading={statsLoading}
           />
         ))}
       </div>

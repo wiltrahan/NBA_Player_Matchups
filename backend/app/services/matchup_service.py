@@ -8,6 +8,7 @@ from typing import Dict, List
 from app.models import (
     GameLinesResponse,
     MatchupResponse,
+    PlayerCardWindow,
     PlayerCardResponse,
     PlayerMatchup,
     RefreshResponse,
@@ -56,11 +57,22 @@ class MatchupService:
         window_key = window.value
         base_cache_key = f"matchups:{slate_date.isoformat()}:{window_key}"
         base_response = self.cache.get(base_cache_key)
+        expected_as_of = as_of_date_for_slate(slate_date)
 
         if base_response is None:
             base_response = self.snapshot_store.get(slate_date=slate_date, window=window)
             if base_response is not None:
                 self.cache.set(base_cache_key, base_response)
+        if base_response is not None and base_response.as_of_date < expected_as_of:
+            self._logger.info(
+                "Ignoring stale snapshot for %s window=%s (as_of=%s expected>=%s)",
+                slate_date.isoformat(),
+                window.value,
+                base_response.as_of_date.isoformat(),
+                expected_as_of.isoformat(),
+            )
+            base_response = None
+
         if base_response is None:
             base_response = await self._compute_matchups(slate_date=slate_date, window=window)
             try:
@@ -169,20 +181,90 @@ class MatchupService:
             "season_end": season_end,
         }
 
-    async def get_player_card(self, player_id: int, slate_date: date | None = None) -> PlayerCardResponse | None:
-        if slate_date is not None:
-            card = self.snapshot_store.get_player_card_as_of(player_id=player_id, as_of_date=slate_date)
-        else:
-            card = self.snapshot_store.get_latest_player_card(player_id=player_id)
-        if card is not None:
-            return card
+    async def get_player_card(
+        self,
+        player_id: int,
+        slate_date: date | None = None,
+        window: PlayerCardWindow = PlayerCardWindow.season,
+    ) -> PlayerCardResponse | None:
+        as_of_date = slate_date or current_et_date()
+        if window == PlayerCardWindow.season:
+            if slate_date is not None:
+                card = self.snapshot_store.get_player_card_as_of(
+                    player_id=player_id,
+                    as_of_date=slate_date,
+                    window=window,
+                )
+            else:
+                card = self.snapshot_store.get_latest_player_card(player_id=player_id, window=window)
+            if card is not None:
+                return card
 
-        # Best-effort population on cold start.
-        target_date = slate_date or current_et_date()
-        await self.get_matchups(slate_date=target_date, window=Window.season)
+        # Fast path for missing non-season windows: backfill from locally cached player logs only.
+        season_card = self.snapshot_store.get_player_card_as_of(
+            player_id=player_id,
+            as_of_date=as_of_date,
+            window=PlayerCardWindow.season,
+        )
+        if season_card is not None:
+            season = season_label_for_date(as_of_date)
+            cards = self.nba_service.build_player_card_windows_for_player(
+                player_id=player_id,
+                as_of_date=as_of_date_for_slate(as_of_date),
+                season=season,
+                fallback_team=season_card.team,
+                fallback_position=season_card.position_group,
+            )
+            if cards:
+                try:
+                    self.snapshot_store.upsert_player_cards(cards)
+                except Exception as exc:
+                    self._logger.warning(
+                        "Failed upserting windowed player cards for player_id=%s as_of=%s: %s",
+                        player_id,
+                        as_of_date.isoformat(),
+                        exc,
+                    )
+            if slate_date is not None:
+                card = self.snapshot_store.get_player_card_as_of(
+                    player_id=player_id,
+                    as_of_date=slate_date,
+                    window=window,
+                )
+            else:
+                card = self.snapshot_store.get_latest_player_card(player_id=player_id, window=window)
+            if card is not None:
+                return card
+            # Graceful fallback instead of 404 if we still could not compute window values quickly.
+            return season_card
+
+        # Best-effort population on cold start when even season card is missing.
+        target_date = as_of_date
+        await self._populate_player_cards_for_date(target_date)
         if slate_date is not None:
-            return self.snapshot_store.get_player_card_as_of(player_id=player_id, as_of_date=slate_date)
-        return self.snapshot_store.get_latest_player_card(player_id=player_id)
+            return self.snapshot_store.get_player_card_as_of(player_id=player_id, as_of_date=slate_date, window=window)
+        return self.snapshot_store.get_latest_player_card(player_id=player_id, window=window)
+
+    async def _populate_player_cards_for_date(self, slate_date: date) -> None:
+        as_of_date = as_of_date_for_slate(slate_date)
+        season = season_label_for_date(slate_date)
+        games = self.nba_service.fetch_slate_games(slate_date)
+        slate_teams = {team for game in games for team in (game.away_team, game.home_team)}
+        team_token = ",".join(sorted(slate_teams)) if slate_teams else "none"
+        snapshot_cache_key = f"snapshot:{season}:{as_of_date.isoformat()}:{team_token}"
+
+        snapshot = self.cache.get(snapshot_cache_key)
+        if snapshot is None:
+            snapshot = self.nba_service.build_snapshot(
+                as_of_date=as_of_date,
+                season=season,
+                slate_teams=slate_teams,
+            )
+            self.cache.set(snapshot_cache_key, snapshot)
+
+        player_cards = snapshot.get("player_cards", [])
+        if player_cards:
+            self.snapshot_store.upsert_player_cards(player_cards)
 
     async def get_game_lines(self, slate_date: date) -> GameLinesResponse:
         cache_key = f"game-lines:{slate_date.isoformat()}"
