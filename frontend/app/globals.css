@@ -587,14 +587,14 @@ button {
 .game-pill {
   flex: 0 0 auto;
   width: auto;
-  min-height: 56px;
+  min-height: 60px;
   scroll-snap-align: start;
   border: 1px solid transparent;
   padding: var(--space-8) var(--space-16);
   border-radius: 999px;
   border-color: transparent;
   background: var(--color-surface-2);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   position: relative;
@@ -617,13 +617,21 @@ button {
   letter-spacing: 0.02em;
 }
 
+.game-pill-tipoff {
+  font-size: 0.68rem;
+  font-weight: 560;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--color-muted) 82%, transparent);
+  text-transform: uppercase;
+}
+
 .game-pill-lines {
-  display: inline-flex;
-  gap: var(--space-8);
+  display: block;
   font-size: 0.68rem;
   font-weight: 500;
   color: color-mix(in srgb, var(--color-muted) 88%, transparent);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .game-pill.active .game-pill-lines {
@@ -642,6 +650,7 @@ button {
   transform: scaleX(0);
   transform-origin: left center;
   transition: transform 170ms var(--ease-premium);
+  display: none;
 }
 
 .game-pill.active {
@@ -651,10 +660,6 @@ button {
     color-mix(in srgb, var(--color-accent) 14%, var(--color-surface)) 100%
   );
   border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
-}
-
-.game-pill.active::after {
-  transform: scaleX(1);
 }
 
 .game-pill:hover {
@@ -1145,6 +1150,17 @@ th {
   font-variant-numeric: tabular-nums;
 }
 
+th.game-env-col,
+td.game-env-cell {
+  text-align: center;
+}
+
+th.game-env-col .sort-button {
+  width: 100%;
+  display: inline-flex;
+  justify-content: center;
+}
+
 .mobile-player-top p,
 .rank-pill-subtle,
 .status {
@@ -1281,6 +1297,12 @@ tbody td:first-child {
 .skeleton-chip {
   width: 56px;
   height: 20px;
+  border-radius: 999px;
+}
+
+.matchup-stat-skeleton {
+  width: 44px;
+  height: 14px;
   border-radius: 999px;
 }
 
@@ -1629,6 +1651,42 @@ tbody td:first-child {
   letter-spacing: 0.02em;
 }
 
+.player-card-window-toggle {
+  margin-top: var(--space-8);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.player-card-window-pill {
+  width: auto;
+  min-height: 32px;
+  padding: 0 var(--space-8);
+  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  color: var(--color-muted);
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.74rem;
+  letter-spacing: 0.02em;
+}
+
+.player-card-window-pill.is-active {
+  background: color-mix(in srgb, var(--color-accent) 16%, var(--color-surface));
+  color: var(--color-text);
+  border-color: color-mix(in srgb, var(--color-accent-2) 62%, var(--color-border));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-accent-2) 32%, transparent),
+    var(--shadow-soft-sm);
+}
+
+.player-card-window-pill:disabled {
+  opacity: 0.72;
+  cursor: wait;
+}
+
 .player-card-lead-grid {
   margin-top: var(--space-16);
   display: grid;
@@ -1891,12 +1949,14 @@ tbody td:first-child {
 
 @media (min-width: 1080px) {
   .control-row {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .games {
+    display: flex;
     flex-wrap: wrap;
     overflow-x: visible;
+    scroll-snap-type: none;
     margin: 0;
     padding: 0;
   }

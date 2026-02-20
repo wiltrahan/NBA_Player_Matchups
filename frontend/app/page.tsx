@@ -2,13 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { fetchGameLines, fetchMatchups, fetchMeta, fetchPlayerCard, refreshSlate } from "@/lib/api";
-import type { GameLine, MatchupResponse, MetaResponse, PlayerCardResponse, WindowType } from "@/lib/types";
-import { DensityToggle } from "./components/DensityToggle";
+import type { GameLine, MatchupResponse, PlayerCardResponse, PlayerCardWindow, WindowType } from "@/lib/types";
 import { MatchupGrid } from "./components/matchups/MatchupGrid";
 import { PageLayout } from "./components/PageLayout";
 import { RankLegend } from "./components/RankLegend";
 import { RankPill } from "./components/RankPill";
-import { ThemeToggle } from "./components/ThemeToggle";
 import { InjuryStatusBadge } from "./components/injuries/InjuryStatusBadge";
 import { Button } from "./components/controls/Button";
 import { Input } from "./components/controls/Input";
@@ -16,6 +14,7 @@ import { Select } from "./components/controls/Select";
 import { buildMatchupPanels } from "@/lib/matchup_panels";
 
 const STATS = ["PTS", "REB", "AST", "3PM", "STL", "BLK"];
+const PLAYER_CARD_WINDOWS: PlayerCardWindow[] = ["season", "last10", "last5"];
 const TEAM_ALIASES: Record<string, string[]> = {
   ATL: ["atl", "atlanta", "hawks", "atlanta hawks"],
   BKN: ["bkn", "brooklyn", "nets", "brooklyn nets"],
@@ -50,7 +49,6 @@ const TEAM_ALIASES: Record<string, string[]> = {
 };
 
 type SortDirection = "asc" | "desc";
-type Density = "comfortable" | "compact";
 type MatchupView = "grid" | "table";
 type SortKey =
   | "player_name"
@@ -67,6 +65,12 @@ type SortKey =
   | "BLK";
 
 const SKELETON_ROWS = 8;
+
+function playerCardWindowLabel(window: PlayerCardWindow): string {
+  if (window === "season") return "Season";
+  if (window === "last10") return "Last 10";
+  return "Last 5";
+}
 
 function normalizeSearchValue(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -104,6 +108,26 @@ function formatFavoriteLabel(
   if (hasAway) return `${awayTeam}: ${formatSpread(awaySpread)}`;
   if (hasHome) return `${homeTeam}: ${formatSpread(homeSpread)}`;
   return "Line: —";
+}
+
+function formatTipoffEt(startTimeUtc?: string | null): string {
+  if (!startTimeUtc) return "TBD";
+  const normalized = /(?:Z|[+-]\d{2}:\d{2})$/.test(startTimeUtc) ? startTimeUtc : `${startTimeUtc}Z`;
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return "TBD";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "America/New_York",
+    timeZoneName: "short",
+  }).formatToParts(parsed);
+  const hour = parts.find((part) => part.type === "hour")?.value ?? "";
+  const minute = parts.find((part) => part.type === "minute")?.value ?? "";
+  const dayPeriod = (parts.find((part) => part.type === "dayPeriod")?.value ?? "").toUpperCase();
+  const zone = (parts.find((part) => part.type === "timeZoneName")?.value ?? "ET").toUpperCase();
+  const minuteSegment = minute === "00" ? "" : `:${minute}`;
+  return `${hour}${minuteSegment}${dayPeriod} ${zone}`.trim();
 }
 
 function matchesPlayerOrTeamSearch(playerName: string, teamAbbr: string, query: string): boolean {
@@ -178,7 +202,6 @@ function resolveInjuryBadge(status?: string | null): InjuryBadge | null {
 }
 
 export default function HomePage() {
-  const [meta, setMeta] = useState<MetaResponse | null>(null);
   const [data, setData] = useState<MatchupResponse | null>(null);
   const [date, setDate] = useState("");
   const [windowType, setWindowType] = useState<WindowType>("season");
@@ -186,7 +209,6 @@ export default function HomePage() {
   const [selectedMatchup, setSelectedMatchup] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey>("PTS");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
-  const [density, setDensity] = useState<Density>("comfortable");
   const [viewOverride, setViewOverride] = useState<MatchupView | null>(null);
   const [filtersExpanded, setFiltersExpanded] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -195,8 +217,12 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [cardError, setCardError] = useState<string | null>(null);
   const [selectedCard, setSelectedCard] = useState<PlayerCardResponse | null>(null);
+  const [selectedCardWindow, setSelectedCardWindow] = useState<PlayerCardWindow>("season");
+  const [cardWindowLoading, setCardWindowLoading] = useState<PlayerCardWindow | null>(null);
   const [activePlayerRowId, setActivePlayerRowId] = useState<number | null>(null);
-  const [playerCardsById, setPlayerCardsById] = useState<Record<number, PlayerCardResponse>>({});
+  const [playerCardsById, setPlayerCardsById] = useState<
+    Record<number, Partial<Record<PlayerCardWindow, PlayerCardResponse>>>
+  >({});
   const [gameLinesById, setGameLinesById] = useState<Record<string, GameLine>>({});
   const [isCardClosing, setIsCardClosing] = useState(false);
 
@@ -204,7 +230,6 @@ export default function HomePage() {
     const loadMeta = async () => {
       try {
         const metaResponse = await fetchMeta();
-        setMeta(metaResponse);
         setDate(metaResponse.current_date_et);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to load metadata.");
@@ -353,23 +378,32 @@ export default function HomePage() {
     }
   };
 
+  const loadPlayerCardWindow = async (playerId: number, window: PlayerCardWindow) => {
+    const cachedCard = playerCardsById[playerId]?.[window];
+    if (cachedCard) {
+      return cachedCard;
+    }
+    const card = await fetchPlayerCard(playerId, date, window);
+    setPlayerCardsById((current) => ({
+      ...current,
+      [playerId]: {
+        ...(current[playerId] ?? {}),
+        [window]: card,
+      },
+    }));
+    return card;
+  };
+
   const onPlayerClick = async (playerId: number) => {
     setActivePlayerRowId(playerId);
     setIsCardClosing(false);
+    setSelectedCardWindow("season");
     setCardLoading(true);
     setCardError(null);
 
-    const cachedCard = playerCardsById[playerId];
-    if (cachedCard) {
-      setSelectedCard(cachedCard);
-      setCardLoading(false);
-      return;
-    }
-
     try {
-      const card = await fetchPlayerCard(playerId, date);
-      setPlayerCardsById((current) => ({ ...current, [playerId]: card }));
-      setSelectedCard(card);
+      const seasonCard = await loadPlayerCardWindow(playerId, "season");
+      setSelectedCard(seasonCard);
     } catch (err) {
       setCardError(err instanceof Error ? err.message : "Failed to load player card.");
       setSelectedCard(null);
@@ -382,11 +416,36 @@ export default function HomePage() {
   const closePlayerCard = () => {
     if (!selectedCard || isCardClosing) return;
     setIsCardClosing(true);
+    setCardWindowLoading(null);
     window.setTimeout(() => {
       setSelectedCard(null);
       setIsCardClosing(false);
       setActivePlayerRowId(null);
     }, 160);
+  };
+
+  const onPlayerCardWindowChange = async (window: PlayerCardWindow) => {
+    if (!selectedCard) return;
+    setSelectedCardWindow(window);
+    setCardWindowLoading(window);
+    const playerId = selectedCard.player_id;
+    const cachedCard = playerCardsById[playerId]?.[window];
+    if (cachedCard) {
+      setSelectedCard(cachedCard);
+      setCardWindowLoading(null);
+      return;
+    }
+    setCardLoading(true);
+    setCardError(null);
+    try {
+      const card = await loadPlayerCardWindow(playerId, window);
+      setSelectedCard(card);
+    } catch (err) {
+      setCardError(err instanceof Error ? err.message : "Failed to load player card.");
+    } finally {
+      setCardWindowLoading(null);
+      setCardLoading(false);
+    }
   };
 
   const hasVisiblePlayers = sortedTablePlayers.length > 0;
@@ -410,22 +469,35 @@ export default function HomePage() {
     if (!selectedGame || tablePlayers.length === 0) return;
 
     const missingIds = Array.from(new Set(tablePlayers.map((player) => player.player_id))).filter(
-      (playerId) => !playerCardsById[playerId],
+      (playerId) => !playerCardsById[playerId]?.season,
     );
     if (missingIds.length === 0) return;
 
     let cancelled = false;
-    void Promise.allSettled(
-      missingIds.map(async (playerId) => {
-        try {
-          const card = await fetchPlayerCard(playerId, date);
-          if (cancelled) return;
-          setPlayerCardsById((current) => (current[playerId] ? current : { ...current, [playerId]: card }));
-        } catch {
-          // Keep panel cells blank when card lookup fails.
+    void (async () => {
+      const results = await Promise.allSettled(
+        missingIds.map(async (playerId) => ({ playerId, card: await fetchPlayerCard(playerId, date, "season") })),
+      );
+      if (cancelled) return;
+      const fetched: Record<number, Partial<Record<PlayerCardWindow, PlayerCardResponse>>> = {};
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          fetched[result.value.playerId] = { season: result.value.card };
         }
-      }),
-    );
+      }
+      if (Object.keys(fetched).length === 0) return;
+      setPlayerCardsById((current) => {
+        const merged = { ...current };
+        for (const [playerId, windows] of Object.entries(fetched)) {
+          const numericId = Number(playerId);
+          merged[numericId] = {
+            ...(windows ?? {}),
+            ...(current[numericId] ?? {}),
+          };
+        }
+        return merged;
+      });
+    })();
 
     return () => {
       cancelled = true;
@@ -433,10 +505,22 @@ export default function HomePage() {
   }, [selectedGame, tablePlayers, playerCardsById, date]);
   useEffect(() => {
     setPlayerCardsById({});
+    setSelectedCardWindow("season");
+    setCardWindowLoading(null);
   }, [date]);
+  const seasonPlayerCardsById = useMemo(
+    () =>
+      Object.entries(playerCardsById).reduce<Record<number, PlayerCardResponse>>((acc, [playerId, windows]) => {
+        if (windows?.season) {
+          acc[Number(playerId)] = windows.season;
+        }
+        return acc;
+      }, {}),
+    [playerCardsById],
+  );
   const matchupPanels = useMemo(
-    () => buildMatchupPanels(selectedGame, tablePlayers, playerCardsById, data?.injuries ?? []),
-    [selectedGame, tablePlayers, playerCardsById, data?.injuries],
+    () => buildMatchupPanels(selectedGame, tablePlayers, seasonPlayerCardsById, data?.injuries ?? []),
+    [selectedGame, tablePlayers, seasonPlayerCardsById, data?.injuries],
   );
   // Grid requires an actual selected game; otherwise force table-only mode.
   const canUseGrid = Boolean(selectedGame);
@@ -444,6 +528,10 @@ export default function HomePage() {
   const activeView: MatchupView = canUseGrid ? (viewOverride ?? defaultView) : "table";
   const showGrid = activeView === "grid" && canUseGrid;
   const showTable = !showGrid;
+  const isGridStatsLoading =
+    showGrid &&
+    Boolean(selectedGame) &&
+    tablePlayers.some((player) => !playerCardsById[player.player_id]?.season);
 
   return (
     <>
@@ -453,10 +541,9 @@ export default function HomePage() {
             <div className="hero-top">
               <div>
                 <h1>NBA Matchup Finder</h1>
-                <p>Daily matchup ranks grouped by Guards / Forwards / Centers.</p>
+                <p>Today&apos;s matchup ranks grouped by Guards / Forwards / Centers.</p>
               </div>
               <div className="header-actions">
-                <ThemeToggle />
                 <Button type="button" onClick={onRefresh} disabled={refreshing || !date} loading={refreshing} variant="primary" className="refresh-button">
                   {refreshing ? "Refreshing..." : "Refresh Slate"}
                 </Button>
@@ -465,12 +552,11 @@ export default function HomePage() {
           </div>
         }
         filters={
-          <div className="controls">
-            <div className="filters-header">
-              <h2>Filter Bar</h2>
-              <button
-                type="button"
-                className="filters-toggle"
+            <div className="controls">
+              <div className="filters-header">
+                <button
+                  type="button"
+                  className="filters-toggle"
                 aria-expanded={filtersExpanded}
                 aria-controls="filter-controls"
                 onClick={() => setFiltersExpanded((current) => !current)}
@@ -479,17 +565,6 @@ export default function HomePage() {
               </button>
             </div>
             <div id="filter-controls" className={`control-row ${filtersExpanded ? "expanded" : "collapsed"}`}>
-              <label>
-                Date
-                <Input
-                  type="date"
-                  value={date}
-                  min={meta?.season_start}
-                  max={meta?.season_end}
-                  onChange={(event) => setDate(event.target.value)}
-                />
-              </label>
-
               <label>
                 Window
                 <Select value={windowType} onChange={(event) => setWindowType(event.target.value as WindowType)}>
@@ -527,6 +602,7 @@ export default function HomePage() {
                   }
                 />
               </label>
+
             </div>
           </div>
         }
@@ -534,12 +610,8 @@ export default function HomePage() {
           !loading && data ? (
             <div className="slate-summary">
               <h2>
-                Slate: {formatDateDisplay(data.slate_date)} ({data.games.length} games)
+                Today&apos;s Slate: {formatDateDisplay(data.slate_date)} ({data.games.length} games)
               </h2>
-              <p>
-                Built from data available through <strong>{formatDateDisplay(data.as_of_date)}</strong> with{" "}
-                <strong>{data.window}</strong> window.
-              </p>
               <div className="chip-scroll">
                 <div className="games">
                   {data.games.map((game) => (
@@ -556,16 +628,15 @@ export default function HomePage() {
                           }}
                         >
                           <span className="game-pill-matchup">{game.away_team} @ {game.home_team}</span>
+                          <span className="game-pill-tipoff">{formatTipoffEt(game.start_time_utc)}</span>
                           <span className="game-pill-lines">
-                            <span>
-                              {formatFavoriteLabel(
-                                game.away_team,
-                                game.home_team,
-                                line?.away_spread,
-                                line?.home_spread,
-                              )}
-                            </span>
-                            <span>Total: {typeof line?.game_total === "number" ? line.game_total.toFixed(1) : "—"}</span>
+                            {formatFavoriteLabel(
+                              game.away_team,
+                              game.home_team,
+                              line?.away_spread,
+                              line?.home_spread,
+                            )}{" "}
+                            Total: {typeof line?.game_total === "number" ? line.game_total.toFixed(1) : "—"}
                           </span>
                         </button>
                       );
@@ -577,7 +648,7 @@ export default function HomePage() {
           ) : (
             <div className="slate-summary">
               <h2>Slate</h2>
-              <p>Choose a date and window to load matchups.</p>
+              <p>Loading today&apos;s slate.</p>
             </div>
           )
         }
@@ -585,7 +656,7 @@ export default function HomePage() {
           <>
             {error ? (
               <p className="error">
-                {error} Try selecting a different date window or refreshing the slate.
+                {error} Try changing window or refreshing today&apos;s slate.
               </p>
             ) : null}
             <div className="table-toolbar">
@@ -611,7 +682,6 @@ export default function HomePage() {
                     </button>
                   </div>
                 ) : null}
-                {showTable ? <DensityToggle value={density} onChange={setDensity} /> : null}
               </div>
             </div>
             <RankLegend />
@@ -620,12 +690,13 @@ export default function HomePage() {
                 panels={matchupPanels}
                 activePlayerRowId={activePlayerRowId}
                 onPlayerClick={(playerId) => void onPlayerClick(playerId)}
+                statsLoading={isGridStatsLoading}
               />
             ) : null}
             {loading && showTable ? (
               <>
                 <p className="status">Loading matchup data...</p>
-                <div className={`table-wrap desktop-table ${density === "compact" ? "table-compact" : "table-comfortable"}`}>
+                <div className="table-wrap desktop-table table-compact">
                   <table>
                     <thead>
                       <tr>
@@ -633,8 +704,15 @@ export default function HomePage() {
                         <th>Team</th>
                         <th>Opp</th>
                         <th>Pos</th>
-                        <th className="num-col">MPG</th>
-                        <th className="num-col">Env</th>
+                        <th className="num-col" title="Minutes Per Game">
+                          MPG
+                        </th>
+                        <th
+                          className="num-col game-env-col"
+                          title="GAME ENV is the matchup environment for that player's opponent. Higher = faster pace + softer defense"
+                        >
+                          GAME ENV
+                        </th>
                         {STATS.map((header) => (
                           <th key={header} className="num num-col stat-col">
                             {header}
@@ -649,7 +727,7 @@ export default function HomePage() {
                           <td><span className="skeleton-block skeleton-text-short" /></td>
                           <td><span className="skeleton-block skeleton-text-short" /></td>
                           <td><span className="skeleton-block skeleton-text-short" /></td>
-                          <td className="num-cell"><span className="skeleton-block skeleton-chip" /></td>
+                          <td className="num-cell game-env-cell"><span className="skeleton-block skeleton-chip" /></td>
                           <td className="num-cell"><span className="skeleton-block skeleton-chip" /></td>
                           {STATS.map((stat) => (
                             <td key={`skeleton-${index}-${stat}`} className="num num-cell stat-col">
@@ -686,7 +764,7 @@ export default function HomePage() {
             ) : null}
             {!loading && data && showTable && hasVisiblePlayers ? (
               <>
-                <div className={`table-wrap desktop-table ${density === "compact" ? "table-compact" : "table-comfortable"}`}>
+                <div className="table-wrap desktop-table table-compact">
                   <table>
                     <thead>
                       <tr>
@@ -711,13 +789,23 @@ export default function HomePage() {
                           </button>
                         </th>
                         <th className="num num-col">
-                          <button type="button" className="sort-button" onClick={() => onSort("avg_minutes")}>
+                          <button
+                            type="button"
+                            className="sort-button"
+                            onClick={() => onSort("avg_minutes")}
+                            title="Minutes Per Game"
+                          >
                             MPG{sortLabel("avg_minutes")}
                           </button>
                         </th>
-                        <th className="num num-col">
-                          <button type="button" className="sort-button" onClick={() => onSort("environment_score")}>
-                            Env{sortLabel("environment_score")}
+                        <th className="num num-col game-env-col">
+                          <button
+                            type="button"
+                            className="sort-button"
+                            onClick={() => onSort("environment_score")}
+                            title="GAME ENV is the matchup environment for that player's opponent. Higher = faster pace + softer defense"
+                          >
+                            GAME ENV{sortLabel("environment_score")}
                           </button>
                         </th>
                         {STATS.map((header) => (
@@ -760,7 +848,7 @@ export default function HomePage() {
                           <td>{player.opponent}</td>
                           <td>{player.position_group}</td>
                           <td className="num num-cell">{player.avg_minutes.toFixed(1)}</td>
-                          <td className="num num-cell">{player.environment_score.toFixed(1)}</td>
+                          <td className="num num-cell game-env-cell">{player.environment_score.toFixed(1)}</td>
                           {STATS.map((name) => {
                             const tierValue = player.stat_tiers[name] ?? "red";
                             const rank = player.stat_ranks[name] ?? 30;
@@ -810,7 +898,7 @@ export default function HomePage() {
                       <div className="mobile-meta">
                         <span>{player.position_group}</span>
                         <span>MPG {player.avg_minutes.toFixed(1)}</span>
-                        <span>ENV {player.environment_score.toFixed(1)}</span>
+                        <span>GAME ENV {player.environment_score.toFixed(1)}</span>
                       </div>
                       <div className="mobile-stat-grid">
                         {STATS.map((name) => {
@@ -870,6 +958,31 @@ export default function HomePage() {
                   <span>{selectedCard.position_group}</span>
                   <span>Season {selectedCard.season}</span>
                 </div>
+                <div className="player-card-window-toggle" role="tablist" aria-label="Player card time window">
+                  {PLAYER_CARD_WINDOWS.map((window) => {
+                    return (
+                      <button
+                        key={window}
+                        type="button"
+                        className={`player-card-window-pill ${selectedCardWindow === window ? "is-active" : ""}`}
+                        onClick={() => void onPlayerCardWindowChange(window)}
+                        disabled={cardWindowLoading === window}
+                        role="tab"
+                        aria-selected={selectedCardWindow === window}
+                        title={
+                          window === "season"
+                            ? "Season baseline"
+                            : playerCardWindowLabel(window)
+                        }
+                      >
+                        <span>
+                          {playerCardWindowLabel(window)}
+                          {cardWindowLoading === window ? "..." : ""}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               <Button type="button" variant="secondary" onClick={closePlayerCard} className="player-card-close">
                 Close
@@ -921,7 +1034,6 @@ export default function HomePage() {
                   <p><span>SPG</span><strong>{selectedCard.steals_pg.toFixed(1)}</strong></p>
                   <p><span>BPG</span><strong>{selectedCard.blocks_pg.toFixed(1)}</strong></p>
                   <p><span title={statTooltip("TOV/G")}>TOV/G</span><strong>{selectedCard.turnovers_pg.toFixed(1)}</strong></p>
-                  <p><span>As Of</span><strong>{formatAsOfDate(selectedCard.as_of_date)}</strong></p>
                 </div>
               </section>
             </div>

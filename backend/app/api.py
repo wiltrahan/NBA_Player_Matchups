@@ -5,7 +5,15 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.models import GameLinesResponse, MatchupResponse, MetaResponse, PlayerCardResponse, RefreshResponse, Window
+from app.models import (
+    GameLinesResponse,
+    MatchupResponse,
+    MetaResponse,
+    PlayerCardResponse,
+    PlayerCardWindow,
+    RefreshResponse,
+    Window,
+)
 from app.services.matchup_service import MatchupService
 from app.utils import current_et_date
 
@@ -54,9 +62,10 @@ async def get_player_card(
     service: MatchupService = Depends(get_matchup_service),
     player_id: int = Query(alias="player_id"),
     date_param: Optional[date] = Query(default=None, alias="date"),
+    window: PlayerCardWindow = Query(default=PlayerCardWindow.season),
 ) -> PlayerCardResponse:
     try:
-        card = await service.get_player_card(player_id=player_id, slate_date=date_param)
+        card = await service.get_player_card(player_id=player_id, slate_date=date_param, window=window)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to fetch player card: {exc}") from exc
 

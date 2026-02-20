@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, datetime, timezone
 import logging
 import os
 from pathlib import Path
+import re
 from time import perf_counter
 from typing import Dict, Iterable, List
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from nba_api.stats.endpoints import (
@@ -18,7 +20,7 @@ from nba_api.stats.endpoints import (
 )
 from nba_api.stats.static import teams as nba_teams
 
-from app.models import Game, PlayerCardResponse, PositionGroup
+from app.models import Game, PlayerCardResponse, PlayerCardWindow, PositionGroup
 from app.services.scoring import build_environment_scores, build_rank_tables
 from app.utils import SUPPORTED_STATS, map_position_groups, parse_matchup_opponent, season_label_for_date
 
@@ -67,7 +69,7 @@ class NBADataService:
                 frames = board.get_data_frames()
                 if not frames:
                     return []
-                return self._games_from_scoreboard_frames(frames)
+                return self._games_from_scoreboard_frames(frames, slate_date)
             except Exception as exc:
                 last_error = exc
                 self._logger.warning(
@@ -85,7 +87,31 @@ class NBADataService:
             )
         return []
 
-    def _games_from_scoreboard_frames(self, frames: list[pd.DataFrame]) -> list[Game]:
+    @staticmethod
+    def _parse_tipoff_utc(status_text: str, slate_date: date) -> str | None:
+        match = re.search(r"(\d{1,2}):(\d{2})\s*([AP]M)\s*ET", status_text.upper())
+        if not match:
+            return None
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        am_pm = match.group(3)
+        if am_pm == "PM" and hour != 12:
+            hour += 12
+        if am_pm == "AM" and hour == 12:
+            hour = 0
+
+        et_dt = datetime(
+            year=slate_date.year,
+            month=slate_date.month,
+            day=slate_date.day,
+            hour=hour,
+            minute=minute,
+            tzinfo=ZoneInfo("America/New_York"),
+        )
+        utc_dt = et_dt.astimezone(timezone.utc)
+        return utc_dt.isoformat().replace("+00:00", "Z")
+
+    def _games_from_scoreboard_frames(self, frames: list[pd.DataFrame], slate_date: date) -> list[Game]:
         headers = frames[0]
         line_scores = frames[1] if len(frames) > 1 else pd.DataFrame()
 
@@ -118,12 +144,13 @@ class NBADataService:
             if not game_id or not home or not away:
                 continue
 
+            game_status_text = str(row.get("GAME_STATUS_TEXT", "") or "")
             games.append(
                 Game(
                     game_id=game_id,
                     away_team=away,
                     home_team=home,
-                    start_time_utc=(str(row.get("GAME_DATE_EST") or "") or None),
+                    start_time_utc=self._parse_tipoff_utc(game_status_text, slate_date),
                 )
             )
         return games
@@ -253,8 +280,16 @@ class NBADataService:
         season_logs = self._get_season_player_logs(season=season, as_of_date=as_of_date)
         return self._filter_logs_by_as_of(season_logs, as_of_date=as_of_date)
 
+    def fetch_player_logs_cached_only(self, as_of_date: date, season: str) -> pd.DataFrame:
+        season_logs = self._get_season_player_logs_cached_only(season=season)
+        return self._filter_logs_by_as_of(season_logs, as_of_date=as_of_date)
+
     def fetch_team_logs(self, as_of_date: date, season: str) -> pd.DataFrame:
         season_logs = self._get_season_team_logs(season=season, as_of_date=as_of_date)
+        return self._filter_logs_by_as_of(season_logs, as_of_date=as_of_date)
+
+    def fetch_team_logs_cached_only(self, as_of_date: date, season: str) -> pd.DataFrame:
+        season_logs = self._get_season_team_logs_cached_only(season=season)
         return self._filter_logs_by_as_of(season_logs, as_of_date=as_of_date)
 
     def _get_season_player_logs(self, season: str, as_of_date: date) -> pd.DataFrame:
@@ -277,6 +312,16 @@ class NBADataService:
 
         return cached if cached is not None else pd.DataFrame()
 
+    def _get_season_player_logs_cached_only(self, season: str) -> pd.DataFrame:
+        cached = self._season_player_logs_cache.get(season)
+        if cached is not None:
+            return cached
+        loaded = self._read_cached_frame(self._raw_cache_path("player_logs", season))
+        if loaded is not None:
+            self._season_player_logs_cache[season] = loaded
+            return loaded
+        return pd.DataFrame()
+
     def _get_season_team_logs(self, season: str, as_of_date: date) -> pd.DataFrame:
         cached = self._season_team_logs_cache.get(season)
         if cached is None:
@@ -296,6 +341,16 @@ class NBADataService:
             return fetched
 
         return cached if cached is not None else pd.DataFrame()
+
+    def _get_season_team_logs_cached_only(self, season: str) -> pd.DataFrame:
+        cached = self._season_team_logs_cache.get(season)
+        if cached is not None:
+            return cached
+        loaded = self._read_cached_frame(self._raw_cache_path("team_logs", season))
+        if loaded is not None:
+            self._season_team_logs_cache[season] = loaded
+            return loaded
+        return pd.DataFrame()
 
     def _fetch_player_logs_remote_full_season(self, season: str) -> pd.DataFrame:
         try:
@@ -500,6 +555,10 @@ class NBADataService:
         player_logs = self.fetch_player_logs(as_of_date=as_of_date, season=season)
         player_logs_elapsed = perf_counter() - started
         player_baselines = self._build_player_baselines_from_logs(player_logs)
+        player_logs_last10 = self._limit_player_logs_to_recent_games(player_logs, count=10)
+        player_logs_last5 = self._limit_player_logs_to_recent_games(player_logs, count=5)
+        player_baselines_last10 = self._build_player_baselines_from_logs(player_logs_last10)
+        player_baselines_last5 = self._build_player_baselines_from_logs(player_logs_last5)
         baselines_elapsed = perf_counter() - started
         team_logs = self.fetch_team_logs(as_of_date=as_of_date, season=season)
         team_logs_elapsed = perf_counter() - started
@@ -517,15 +576,37 @@ class NBADataService:
             roster_team_by_player_id=roster_team_by_player_id,
             team_filter=slate_teams,
         )
-        player_cards = self._build_player_cards(
+        season_cards = self._build_player_cards(
             baselines_df=player_baselines,
             player_positions=position_map,
             team_roster_player_ids=team_roster_player_ids,
             roster_team_by_player_id=roster_team_by_player_id,
             as_of_date=as_of_date,
             season=season,
+            window=PlayerCardWindow.season,
             team_filter=slate_teams,
         )
+        last10_cards = self._build_player_cards(
+            baselines_df=player_baselines_last10,
+            player_positions=position_map,
+            team_roster_player_ids=team_roster_player_ids,
+            roster_team_by_player_id=roster_team_by_player_id,
+            as_of_date=as_of_date,
+            season=season,
+            window=PlayerCardWindow.last10,
+            team_filter=slate_teams,
+        )
+        last5_cards = self._build_player_cards(
+            baselines_df=player_baselines_last5,
+            player_positions=position_map,
+            team_roster_player_ids=team_roster_player_ids,
+            roster_team_by_player_id=roster_team_by_player_id,
+            as_of_date=as_of_date,
+            season=season,
+            window=PlayerCardWindow.last5,
+            team_filter=slate_teams,
+        )
+        player_cards = [*season_cards, *last10_cards, *last5_cards]
         rotation_elapsed = perf_counter() - started
         team_game_ids_last10 = self._build_team_last10_game_ids(team_logs)
 
@@ -582,6 +663,7 @@ class NBADataService:
         roster_team_by_player_id: dict[int, str] | None,
         as_of_date: date,
         season: str,
+        window: PlayerCardWindow = PlayerCardWindow.season,
         team_filter: set[str] | None = None,
     ) -> list[PlayerCardResponse]:
         if baselines_df.empty:
@@ -642,6 +724,7 @@ class NBADataService:
                     team=team,
                     season=season,
                     as_of_date=as_of_date,
+                    window=window,
                     position_group=position_group,
                     mpg=values["mpg"],
                     ppg=values["ppg"],
@@ -662,6 +745,183 @@ class NBADataService:
             )
 
         return cards
+
+    def build_player_card_windows_for_player(
+        self,
+        player_id: int,
+        as_of_date: date,
+        season: str,
+        fallback_team: str | None = None,
+        fallback_position: PositionGroup | None = None,
+    ) -> list[PlayerCardResponse]:
+        # Fast path: only use locally cached full-season logs; do not trigger remote nba_api calls.
+        player_logs = self.fetch_player_logs_cached_only(as_of_date=as_of_date, season=season)
+        if player_logs.empty:
+            return []
+
+        player_id_col = self._pick_column(player_logs, ["PLAYER_ID"])
+        if not player_id_col:
+            return []
+
+        player_logs = player_logs[pd.to_numeric(player_logs[player_id_col], errors="coerce") == float(player_id)]
+        if player_logs.empty:
+            return []
+
+        season_baselines = self._build_player_baselines_from_logs(player_logs)
+        if season_baselines.empty:
+            return []
+
+        season_card_preview = self._build_player_cards(
+            baselines_df=season_baselines,
+            player_positions={player_id: [fallback_position or PositionGroup.guards]},
+            team_roster_player_ids=None,
+            roster_team_by_player_id={player_id: fallback_team} if fallback_team else None,
+            as_of_date=as_of_date,
+            season=season,
+            window=PlayerCardWindow.season,
+            team_filter=None,
+        )
+        if not season_card_preview:
+            return []
+        season_base_card = season_card_preview[0]
+
+        resolved_team = fallback_team or season_base_card.team
+        team_logs = self.fetch_team_logs_cached_only(as_of_date=as_of_date, season=season)
+        team_last10_ids = self._recent_team_game_ids(team_logs, team_abbr=resolved_team, count=10)
+        team_last5_ids = self._recent_team_game_ids(team_logs, team_abbr=resolved_team, count=5)
+
+        last10_logs = self._filter_logs_by_game_ids(player_logs, team_last10_ids)
+        last5_logs = self._filter_logs_by_game_ids(player_logs, team_last5_ids)
+        last10_baselines = self._build_player_baselines_from_logs(last10_logs)
+        last5_baselines = self._build_player_baselines_from_logs(last5_logs)
+
+        position = season_base_card.position_group
+        player_positions = {player_id: [position]}
+        roster_team_by_player_id = {player_id: resolved_team} if resolved_team else None
+
+        season_cards = self._build_player_cards(
+            baselines_df=season_baselines,
+            player_positions=player_positions,
+            team_roster_player_ids=None,
+            roster_team_by_player_id=roster_team_by_player_id,
+            as_of_date=as_of_date,
+            season=season,
+            window=PlayerCardWindow.season,
+            team_filter=None,
+        )
+        last10_cards = self._build_player_cards(
+            baselines_df=last10_baselines,
+            player_positions=player_positions,
+            team_roster_player_ids=None,
+            roster_team_by_player_id=roster_team_by_player_id,
+            as_of_date=as_of_date,
+            season=season,
+            window=PlayerCardWindow.last10,
+            team_filter=None,
+        )
+        last5_cards = self._build_player_cards(
+            baselines_df=last5_baselines,
+            player_positions=player_positions,
+            team_roster_player_ids=None,
+            roster_team_by_player_id=roster_team_by_player_id,
+            as_of_date=as_of_date,
+            season=season,
+            window=PlayerCardWindow.last5,
+            team_filter=None,
+        )
+
+        if not last10_cards:
+            last10_cards = [self._build_empty_window_card(season_base_card, PlayerCardWindow.last10)]
+        if not last5_cards:
+            last5_cards = [self._build_empty_window_card(season_base_card, PlayerCardWindow.last5)]
+
+        return [*season_cards, *last10_cards, *last5_cards]
+
+    @staticmethod
+    def _build_empty_window_card(base_card: PlayerCardResponse, window: PlayerCardWindow) -> PlayerCardResponse:
+        return PlayerCardResponse(
+            player_id=base_card.player_id,
+            player_name=base_card.player_name,
+            team=base_card.team,
+            season=base_card.season,
+            as_of_date=base_card.as_of_date,
+            window=window,
+            position_group=base_card.position_group,
+            mpg=0.0,
+            ppg=0.0,
+            assists_pg=0.0,
+            rebounds_pg=0.0,
+            steals_pg=0.0,
+            blocks_pg=0.0,
+            three_pa_pg=0.0,
+            three_pm_pg=0.0,
+            fta_pg=0.0,
+            ftm_pg=0.0,
+            fg_pct=0.0,
+            three_p_pct=0.0,
+            ft_pct=0.0,
+            turnovers_pg=0.0,
+            plus_minus_pg=0.0,
+        )
+
+    def _recent_team_game_ids(self, team_logs_df: pd.DataFrame, team_abbr: str, count: int) -> set[str]:
+        if team_logs_df.empty or count <= 0:
+            return set()
+
+        game_id_col = self._pick_column(team_logs_df, ["GAME_ID"])
+        team_col = self._pick_column(team_logs_df, ["TEAM_ABBREVIATION", "TEAM_ABBREV"])
+        date_col = self._pick_column(team_logs_df, ["GAME_DATE", "GAME_DATE_EST"])
+        if not game_id_col or not team_col or not date_col:
+            return set()
+
+        frame = team_logs_df[[game_id_col, team_col, date_col]].copy()
+        frame[team_col] = frame[team_col].astype(str).str.upper()
+        frame = frame[frame[team_col] == team_abbr.upper()]
+        if frame.empty:
+            return set()
+
+        frame["_parsed_date"] = pd.to_datetime(frame[date_col], errors="coerce")
+        frame = frame[frame["_parsed_date"].notna()]
+        if frame.empty:
+            return set()
+        frame = frame.sort_values("_parsed_date", ascending=False).head(count)
+        return {str(game_id) for game_id in frame[game_id_col].tolist() if str(game_id)}
+
+    def _filter_logs_by_game_ids(self, player_logs_df: pd.DataFrame, game_ids: set[str]) -> pd.DataFrame:
+        if player_logs_df.empty or not game_ids:
+            return pd.DataFrame()
+        game_id_col = self._pick_column(player_logs_df, ["GAME_ID"])
+        if not game_id_col:
+            return pd.DataFrame()
+        frame = player_logs_df.copy()
+        frame[game_id_col] = frame[game_id_col].astype(str)
+        return frame[frame[game_id_col].isin(game_ids)]
+
+    def _limit_player_logs_to_recent_games(self, player_logs_df: pd.DataFrame, count: int) -> pd.DataFrame:
+        if player_logs_df.empty or count <= 0:
+            return pd.DataFrame()
+
+        player_id_col = self._pick_column(player_logs_df, ["PLAYER_ID"])
+        date_col = self._pick_column(player_logs_df, ["GAME_DATE", "GAME_DATE_EST"])
+        game_id_col = self._pick_column(player_logs_df, ["GAME_ID"])
+        if not player_id_col or not date_col:
+            return pd.DataFrame()
+
+        frame = player_logs_df.copy()
+        frame["_parsed_date"] = pd.to_datetime(frame[date_col], errors="coerce")
+        frame = frame[frame["_parsed_date"].notna()]
+        if frame.empty:
+            return pd.DataFrame()
+
+        sort_cols = [player_id_col, "_parsed_date"]
+        ascending = [True, False]
+        if game_id_col:
+            sort_cols.append(game_id_col)
+            ascending.append(False)
+        frame = frame.sort_values(by=sort_cols, ascending=ascending)
+        frame["_rank"] = frame.groupby(player_id_col).cumcount()
+        frame = frame[frame["_rank"] < count].copy()
+        return frame.drop(columns=["_parsed_date", "_rank"])
 
     def _build_rotation_pool(
         self,

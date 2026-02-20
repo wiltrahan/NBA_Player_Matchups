@@ -4,7 +4,7 @@ from datetime import date
 import unittest
 from unittest.mock import AsyncMock
 
-from app.models import Game, PlayerCardResponse, PositionGroup, Window
+from app.models import Game, PlayerCardResponse, PlayerCardWindow, PositionGroup, Window
 from app.services.cache import InMemoryCache
 from app.services.matchup_service import MatchupService
 
@@ -82,7 +82,7 @@ class FakeSnapshotStore:
         self.upsert_calls = 0
         self.delete_calls = 0
         self.player_card_upserts = 0
-        self.player_cards: dict[tuple[int, str, date], PlayerCardResponse] = {}
+        self.player_cards: dict[tuple[int, str, date, PlayerCardWindow], PlayerCardResponse] = {}
 
     def get(self, slate_date: date, window: Window):
         return self.rows.get((slate_date, window))
@@ -101,16 +101,16 @@ class FakeSnapshotStore:
     def upsert_player_cards(self, cards) -> int:
         count = 0
         for card in cards:
-            self.player_cards[(card.player_id, card.season, card.as_of_date)] = card
+            self.player_cards[(card.player_id, card.season, card.as_of_date, card.window)] = card
             count += 1
         self.player_card_upserts += count
         return count
 
-    def get_latest_player_card(self, player_id: int):
+    def get_latest_player_card(self, player_id: int, window: PlayerCardWindow = PlayerCardWindow.season):
         candidates = [
             card
-            for (candidate_player_id, candidate_season, candidate_date), card in self.player_cards.items()
-            if candidate_player_id == player_id
+            for (candidate_player_id, candidate_season, candidate_date, candidate_window), card in self.player_cards.items()
+            if candidate_player_id == player_id and candidate_window == window
         ]
         if not candidates:
             return None
@@ -120,11 +120,16 @@ class FakeSnapshotStore:
             reverse=True,
         )[0]
 
-    def get_player_card_as_of(self, player_id: int, as_of_date: date):
+    def get_player_card_as_of(
+        self,
+        player_id: int,
+        as_of_date: date,
+        window: PlayerCardWindow = PlayerCardWindow.season,
+    ):
         candidates = [
             card
-            for (candidate_player_id, candidate_season, candidate_date), card in self.player_cards.items()
-            if candidate_player_id == player_id and candidate_date <= as_of_date
+            for (candidate_player_id, candidate_season, candidate_date, candidate_window), card in self.player_cards.items()
+            if candidate_player_id == player_id and candidate_date <= as_of_date and candidate_window == window
         ]
         if not candidates:
             return None

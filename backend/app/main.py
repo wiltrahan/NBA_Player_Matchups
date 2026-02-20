@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from app.api import router
+from app.models import Window
 from app.core.config import get_settings
 from app.services.cache import InMemoryCache
 from app.services.injury_service import InjuryService
@@ -14,6 +15,7 @@ from app.services.nba_client import NBADataService
 from app.services.odds_api_service import OddsAPIService
 from app.services.snapshot_store import SnapshotStore
 from app.services.sports_mcp_service import SportsMCPService
+from app.utils import current_et_date
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -62,6 +64,24 @@ def create_app() -> FastAPI:
         sports_mcp_service=sports_mcp_service,
         odds_api_service=odds_api_service,
     )
+
+    @app.on_event("startup")
+    async def prewarm_today_slate() -> None:
+        if not _env_bool("PREWARM_TODAY_ON_STARTUP", True):
+            return
+
+        service: MatchupService = app.state.matchup_service
+        today = current_et_date()
+        windows = [Window.season, Window.last10]
+        for window in windows:
+            cache_key = f"matchups:{today.isoformat()}:{window.value}"
+            if service.cache.get(cache_key) is not None:
+                continue
+            try:
+                await service.get_matchups(slate_date=today, window=window)
+            except Exception:
+                # Startup warmup should not block app serving.
+                continue
 
     @app.get("/health")
     def health() -> dict:

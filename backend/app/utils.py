@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from app.models import MatchupTier, PositionGroup
@@ -41,7 +41,8 @@ def season_bounds_for_label(season_label: str) -> tuple[date, date]:
 
 
 def as_of_date_for_slate(slate_date: date) -> date:
-    return slate_date - timedelta(days=1)
+    # Use same-day data when available, while preventing future as-of dates.
+    return min(slate_date, current_et_date())
 
 
 def map_position_groups(position: str | None) -> list[PositionGroup]:

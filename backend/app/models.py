@@ -12,6 +12,12 @@ class Window(str, Enum):
     last10 = "last10"
 
 
+class PlayerCardWindow(str, Enum):
+    season = "season"
+    last10 = "last10"
+    last5 = "last5"
+
+
 class PositionGroup(str, Enum):
     guards = "Guards"
     forwards = "Forwards"
@@ -97,6 +103,7 @@ class PlayerCardResponse(BaseModel):
     team: str
     season: str
     as_of_date: date
+    window: PlayerCardWindow = PlayerCardWindow.season
     position_group: PositionGroup
     mpg: float
     ppg: float
