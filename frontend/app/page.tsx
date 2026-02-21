@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchGameLines, fetchMatchups, fetchMeta, fetchPlayerCard, refreshSlate } from "@/lib/api";
 import type { GameLine, MatchupResponse, PlayerCardResponse, PlayerCardWindow, WindowType } from "@/lib/types";
 import { MatchupGrid } from "./components/matchups/MatchupGrid";
@@ -225,6 +225,7 @@ export default function HomePage() {
   >({});
   const [gameLinesById, setGameLinesById] = useState<Record<string, GameLine>>({});
   const [isCardClosing, setIsCardClosing] = useState(false);
+  const latestCardWindowRequestRef = useRef<string | null>(null);
 
   useEffect(() => {
     const loadMeta = async () => {
@@ -417,6 +418,7 @@ export default function HomePage() {
     if (!selectedCard || isCardClosing) return;
     setIsCardClosing(true);
     setCardWindowLoading(null);
+    latestCardWindowRequestRef.current = null;
     window.setTimeout(() => {
       setSelectedCard(null);
       setIsCardClosing(false);
@@ -429,22 +431,28 @@ export default function HomePage() {
     setSelectedCardWindow(window);
     setCardWindowLoading(window);
     const playerId = selectedCard.player_id;
+    const requestKey = `${playerId}:${window}:${Date.now()}`;
+    latestCardWindowRequestRef.current = requestKey;
     const cachedCard = playerCardsById[playerId]?.[window];
     if (cachedCard) {
       setSelectedCard(cachedCard);
       setCardWindowLoading(null);
       return;
     }
-    setCardLoading(true);
     setCardError(null);
     try {
       const card = await loadPlayerCardWindow(playerId, window);
-      setSelectedCard(card);
+      if (latestCardWindowRequestRef.current === requestKey) {
+        setSelectedCard(card);
+      }
     } catch (err) {
-      setCardError(err instanceof Error ? err.message : "Failed to load player card.");
+      if (latestCardWindowRequestRef.current === requestKey) {
+        setCardError(err instanceof Error ? err.message : "Failed to load player card.");
+      }
     } finally {
-      setCardWindowLoading(null);
-      setCardLoading(false);
+      if (latestCardWindowRequestRef.current === requestKey) {
+        setCardWindowLoading(null);
+      }
     }
   };
 
@@ -507,6 +515,7 @@ export default function HomePage() {
     setPlayerCardsById({});
     setSelectedCardWindow("season");
     setCardWindowLoading(null);
+    latestCardWindowRequestRef.current = null;
   }, [date]);
   const seasonPlayerCardsById = useMemo(
     () =>

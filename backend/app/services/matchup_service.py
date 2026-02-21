@@ -246,25 +246,49 @@ class MatchupService:
         return self.snapshot_store.get_latest_player_card(player_id=player_id, window=window)
 
     async def _populate_player_cards_for_date(self, slate_date: date) -> None:
-        as_of_date = as_of_date_for_slate(slate_date)
-        season = season_label_for_date(slate_date)
-        games = self.nba_service.fetch_slate_games(slate_date)
-        slate_teams = {team for game in games for team in (game.away_team, game.home_team)}
-        team_token = ",".join(sorted(slate_teams)) if slate_teams else "none"
-        snapshot_cache_key = f"snapshot:{season}:{as_of_date.isoformat()}:{team_token}"
+        try:
+            as_of_date = as_of_date_for_slate(slate_date)
+            season = season_label_for_date(slate_date)
+            games = self.nba_service.fetch_slate_games(slate_date)
+            slate_teams = {team for game in games for team in (game.away_team, game.home_team)}
+            team_token = ",".join(sorted(slate_teams)) if slate_teams else "none"
+            snapshot_cache_key = f"snapshot:{season}:{as_of_date.isoformat()}:{team_token}"
 
-        snapshot = self.cache.get(snapshot_cache_key)
-        if snapshot is None:
-            snapshot = self.nba_service.build_snapshot(
-                as_of_date=as_of_date,
-                season=season,
-                slate_teams=slate_teams,
+            snapshot = self.cache.get(snapshot_cache_key)
+            if snapshot is None:
+                try:
+                    snapshot = self.nba_service.build_snapshot(
+                        as_of_date=as_of_date,
+                        season=season,
+                        slate_teams=slate_teams,
+                    )
+                except Exception as exc:
+                    self._logger.warning(
+                        "Player-card backfill snapshot build failed for %s (season=%s as_of=%s): %s",
+                        slate_date.isoformat(),
+                        season,
+                        as_of_date.isoformat(),
+                        exc,
+                    )
+                    return
+                self.cache.set(snapshot_cache_key, snapshot)
+
+            player_cards = snapshot.get("player_cards", [])
+            if player_cards:
+                try:
+                    self.snapshot_store.upsert_player_cards(player_cards)
+                except Exception as exc:
+                    self._logger.warning(
+                        "Player-card backfill upsert failed for %s: %s",
+                        slate_date.isoformat(),
+                        exc,
+                    )
+        except Exception as exc:
+            self._logger.warning(
+                "Player-card backfill failed for %s: %s",
+                slate_date.isoformat(),
+                exc,
             )
-            self.cache.set(snapshot_cache_key, snapshot)
-
-        player_cards = snapshot.get("player_cards", [])
-        if player_cards:
-            self.snapshot_store.upsert_player_cards(player_cards)
 
     async def get_game_lines(self, slate_date: date) -> GameLinesResponse:
         cache_key = f"game-lines:{slate_date.isoformat()}"
