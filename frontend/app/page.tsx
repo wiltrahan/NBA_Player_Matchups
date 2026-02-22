@@ -14,7 +14,7 @@ import { Select } from "./components/controls/Select";
 import { buildMatchupPanels } from "@/lib/matchup_panels";
 
 const STATS = ["PTS", "REB", "AST", "3PM", "STL", "BLK"];
-const PLAYER_CARD_WINDOWS: PlayerCardWindow[] = ["season", "last10", "last5"];
+const PLAYER_CARD_WINDOWS: PlayerCardWindow[] = ["season", "last10"];
 const TEAM_ALIASES: Record<string, string[]> = {
   ATL: ["atl", "atlanta", "hawks", "atlanta hawks"],
   BKN: ["bkn", "brooklyn", "nets", "brooklyn nets"],
@@ -68,8 +68,7 @@ const SKELETON_ROWS = 8;
 
 function playerCardWindowLabel(window: PlayerCardWindow): string {
   if (window === "season") return "Season";
-  if (window === "last10") return "Last 10";
-  return "Last 5";
+  return "Last 10";
 }
 
 function normalizeSearchValue(value: string): string {

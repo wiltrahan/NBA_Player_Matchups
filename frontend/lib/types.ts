@@ -1,5 +1,5 @@
 export type WindowType = "season" | "last10";
-export type PlayerCardWindow = "season" | "last10" | "last5";
+export type PlayerCardWindow = "season" | "last10";
 
 export type PositionGroup = "Guards" | "Forwards" | "Centers";
 
