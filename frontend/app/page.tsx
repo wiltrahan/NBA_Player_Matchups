@@ -12,6 +12,7 @@ import { Button } from "./components/controls/Button";
 import { Input } from "./components/controls/Input";
 import { Select } from "./components/controls/Select";
 import { buildMatchupPanels } from "@/lib/matchup_panels";
+import { toDisplayedDefenseRank } from "@/lib/rank_display";
 
 const STATS = ["PTS", "REB", "AST", "3PM", "STL", "BLK"];
 const PLAYER_CARD_WINDOWS: PlayerCardWindow[] = ["season", "last10"];
@@ -319,7 +320,12 @@ export default function HomePage() {
       else if (sortKey === "position_group") value = compareString(a.position_group, b.position_group);
       else if (sortKey === "avg_minutes") value = compareNumber(a.avg_minutes, b.avg_minutes);
       else if (sortKey === "environment_score") value = compareNumber(a.environment_score, b.environment_score);
-      else value = compareNumber(a.stat_ranks[sortKey] ?? 30, b.stat_ranks[sortKey] ?? 30);
+      else {
+        value = compareNumber(
+          toDisplayedDefenseRank(a.stat_ranks[sortKey] ?? 30),
+          toDisplayedDefenseRank(b.stat_ranks[sortKey] ?? 30),
+        );
+      }
 
       return sortDirection === "asc" ? value : -value;
     });
@@ -859,7 +865,7 @@ export default function HomePage() {
                           <td className="num num-cell game-env-cell">{player.environment_score.toFixed(1)}</td>
                           {STATS.map((name) => {
                             const tierValue = player.stat_tiers[name] ?? "red";
-                            const rank = player.stat_ranks[name] ?? 30;
+                            const rank = toDisplayedDefenseRank(player.stat_ranks[name] ?? 30);
                             return (
                               <td key={`${player.player_id}-${name}`} className="num num-cell stat-col">
                                 <RankPill tier={tierValue} rank={rank} />
@@ -911,7 +917,7 @@ export default function HomePage() {
                       <div className="mobile-stat-grid">
                         {STATS.map((name) => {
                           const tierValue = player.stat_tiers[name] ?? "red";
-                          const rank = player.stat_ranks[name] ?? 30;
+                          const rank = toDisplayedDefenseRank(player.stat_ranks[name] ?? 30);
                           return (
                             <p key={`${player.player_id}-${name}-mobile`}>
                               <strong>{name}</strong>
