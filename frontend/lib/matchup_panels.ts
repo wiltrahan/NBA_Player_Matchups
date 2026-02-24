@@ -7,6 +7,7 @@ import type {
   PositionGroup,
   Tier,
 } from "./types";
+import { toDisplayedDefenseRank } from "./rank_display";
 
 const PANEL_STATS = ["PTS", "REB", "AST", "3PM", "STL", "BLK"] as const;
 const POSITION_GROUPS: PositionGroup[] = ["Guards", "Forwards", "Centers"];
@@ -129,7 +130,7 @@ function buildPanel(
     }
 
     acc[stat] = {
-      rank,
+      rank: toDisplayedDefenseRank(rank),
       tier: sample.stat_tiers[stat] ?? "red",
     };
     return acc;
